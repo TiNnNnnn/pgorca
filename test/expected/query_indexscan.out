@@ -1,0 +1,510 @@
+-- pg_orca indexscan regression tests
+-- Ported from Greenplum testrepo/query/indexscan
+LOAD 'pg_orca';
+SET pg_orca.enable_orca = on;
+SET client_min_messages = warning;
+-- bfv_mpp23383_nonpartitioned_setup.sql
+create table mpp23383(a int, b varchar(20));
+insert into mpp23383 select g,g from generate_series(1,1000) g;
+create index mpp23383_b on mpp23383(b);
+-- bfv_mpp23383_nonpartitioned.sql
+EXPLAIN select * from mpp23383 where b='1';
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Index Scan using mpp23383_b on mpp23383  (cost=0.00..0.19 rows=400 width=12)
+   Index Cond: ((b)::text = '1'::text)
+ Optimizer: pg_orca
+(3 rows)
+
+select * from mpp23383 where b='1';
+ a | b 
+---+---
+ 1 | 1
+(1 row)
+
+EXPLAIN select * from mpp23383 where '1'=b;
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Index Scan using mpp23383_b on mpp23383  (cost=0.00..0.19 rows=400 width=12)
+   Index Cond: ((b)::text = '1'::text)
+ Optimizer: pg_orca
+(3 rows)
+
+select * from mpp23383 where '1'=b;
+ a | b 
+---+---
+ 1 | 1
+(1 row)
+
+EXPLAIN select * from mpp23383 where '2'> b order by a limit 10;
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
+ Limit  (cost=0.00..0.43 rows=10 width=12)
+   ->  Sort  (cost=0.00..0.43 rows=400 width=12)
+         Sort Key: a
+         ->  Index Scan using mpp23383_b on mpp23383  (cost=0.00..0.19 rows=400 width=12)
+               Index Cond: ((b)::text < '2'::text)
+ Optimizer: pg_orca
+(6 rows)
+
+select * from mpp23383 where '2'> b order by a limit 10;
+ a  | b  
+----+----
+  1 | 1
+ 10 | 10
+ 11 | 11
+ 12 | 12
+ 13 | 13
+ 14 | 14
+ 15 | 15
+ 16 | 16
+ 17 | 17
+ 18 | 18
+(10 rows)
+
+EXPLAIN select * from mpp23383 where b between '1' and '2' order by a limit 10;
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
+ Limit  (cost=0.00..0.43 rows=10 width=12)
+   ->  Sort  (cost=0.00..0.43 rows=400 width=12)
+         Sort Key: a
+         ->  Index Scan using mpp23383_b on mpp23383  (cost=0.00..0.19 rows=400 width=12)
+               Index Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+ Optimizer: pg_orca
+(6 rows)
+
+select * from mpp23383 where b between '1' and '2' order by a limit 10;
+ a  | b  
+----+----
+  1 | 1
+  2 | 2
+ 10 | 10
+ 11 | 11
+ 12 | 12
+ 13 | 13
+ 14 | 14
+ 15 | 15
+ 16 | 16
+ 17 | 17
+(10 rows)
+
+-- predicates on both index and non-index key
+EXPLAIN select * from mpp23383 where b='1' and a='1';
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Index Scan using mpp23383_b on mpp23383  (cost=0.00..0.21 rows=400 width=12)
+   Index Cond: ((b)::text = '1'::text)
+   Filter: (a = 1)
+ Optimizer: pg_orca
+(4 rows)
+
+select * from mpp23383 where b='1' and a='1';
+ a | b 
+---+---
+ 1 | 1
+(1 row)
+
+--negative tests: no index scan plan possible, fall back to planner
+EXPLAIN select * from mpp23383 where b::int='1';
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Seq Scan on mpp23383  (cost=0.00..431.07 rows=400 width=12)
+   Filter: ((b)::integer = 1)
+ Optimizer: pg_orca
+(3 rows)
+
+-- bfv_mpp23383_partitioned.50.sql
+-- @skip MPP-21069, MPP-24883 skip test due to Unexpected internal error
+-- setup
+-- start_ignore
+create table mpp23383_partitioned(a int, b varchar(20), c varchar(20), d varchar(20))
+partition by range(a);
+create table mpp23383_partitioned_p1 partition of mpp23383_partitioned
+  for values from (1) to (500);
+create table mpp23383_partitioned_p2 partition of mpp23383_partitioned
+  for values from (500) to (1001);
+insert into mpp23383_partitioned select g,g,g,g from generate_series(1,1000) g;
+create index idx_b on mpp23383_partitioned(b);
+-- heterogenous indexes
+create index idx_c on mpp23383_partitioned_p1(c);
+create index idx_cd on mpp23383_partitioned_p2(c,d);
+-- end_ignore
+explain select * from mpp23383_partitioned where b='1';
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Append  (cost=4.29..14.87 rows=5 width=178)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=4.29..7.41 rows=2 width=178)
+         Recheck Cond: ((b)::text = '1'::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+               Index Cond: ((b)::text = '1'::text)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=4.30..7.43 rows=3 width=178)
+         Recheck Cond: ((b)::text = '1'::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p2_b_idx  (cost=0.00..4.29 rows=3 width=0)
+               Index Cond: ((b)::text = '1'::text)
+(9 rows)
+
+select * from mpp23383_partitioned where b='1';
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+explain select * from mpp23383_partitioned where '1'=b;
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Append  (cost=4.29..14.87 rows=5 width=178)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=4.29..7.41 rows=2 width=178)
+         Recheck Cond: ('1'::text = (b)::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+               Index Cond: ((b)::text = '1'::text)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=4.30..7.43 rows=3 width=178)
+         Recheck Cond: ('1'::text = (b)::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p2_b_idx  (cost=0.00..4.29 rows=3 width=0)
+               Index Cond: ((b)::text = '1'::text)
+(9 rows)
+
+select * from mpp23383_partitioned where '1'=b;
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+explain select * from mpp23383_partitioned where '2'> b order by a limit 10;
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=27.36..27.39 rows=10 width=178)
+   ->  Sort  (cost=27.36..28.19 rows=333 width=178)
+         Sort Key: mpp23383_partitioned.a
+         ->  Append  (cost=0.00..20.16 rows=333 width=178)
+               ->  Seq Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=0.00..9.24 rows=166 width=178)
+                     Filter: ('2'::text > (b)::text)
+               ->  Seq Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=0.00..9.26 rows=167 width=178)
+                     Filter: ('2'::text > (b)::text)
+(8 rows)
+
+select * from mpp23383_partitioned where '2'> b order by a limit 10;
+ a  | b  | c  | d  
+----+----+----+----
+  1 | 1  | 1  | 1
+ 10 | 10 | 10 | 10
+ 11 | 11 | 11 | 11
+ 12 | 12 | 12 | 12
+ 13 | 13 | 13 | 13
+ 14 | 14 | 14 | 14
+ 15 | 15 | 15 | 15
+ 16 | 16 | 16 | 16
+ 17 | 17 | 17 | 17
+ 18 | 18 | 18 | 18
+(10 rows)
+
+explain select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=14.96..14.97 rows=5 width=178)
+   ->  Sort  (cost=14.96..14.97 rows=5 width=178)
+         Sort Key: mpp23383_partitioned.a
+         ->  Append  (cost=4.29..14.90 rows=5 width=178)
+               ->  Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=4.29..7.42 rows=2 width=178)
+                     Recheck Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+                     ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+                           Index Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+               ->  Bitmap Heap Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=4.30..7.45 rows=3 width=178)
+                     Recheck Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+                     ->  Bitmap Index Scan on mpp23383_partitioned_p2_b_idx  (cost=0.00..4.30 rows=3 width=0)
+                           Index Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+(12 rows)
+
+select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
+ a  | b  | c  | d  
+----+----+----+----
+  1 | 1  | 1  | 1
+  2 | 2  | 2  | 2
+ 10 | 10 | 10 | 10
+ 11 | 11 | 11 | 11
+ 12 | 12 | 12 | 12
+ 13 | 13 | 13 | 13
+ 14 | 14 | 14 | 14
+ 15 | 15 | 15 | 15
+ 16 | 16 | 16 | 16
+ 17 | 17 | 17 | 17
+(10 rows)
+
+-- predicates on both index and non-index key
+explain select * from mpp23383_partitioned where b='1' and a='1';
+                                              QUERY PLAN                                              
+------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned  (cost=4.29..7.42 rows=1 width=178)
+   Recheck Cond: ((b)::text = '1'::text)
+   Filter: (a = 1)
+   ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+         Index Cond: ((b)::text = '1'::text)
+(5 rows)
+
+select * from mpp23383_partitioned where b='1' and a='1';
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+--negative tests: no index scan plan possible, fall back to planner
+explain select * from mpp23383_partitioned where b::int='1';
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Custom Scan (DynamicTableScan)  (cost=0.00..431.12 rows=400 width=52)
+   Filter: ((b)::integer = 1)
+   Root Table: mpp23383_partitioned
+   Partitions Selected: 2
+ Optimizer: pg_orca
+(5 rows)
+
+-- heterogenous indexes
+explain select * from mpp23383_partitioned where c='1';
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Custom Scan (DynamicTableScan)  (cost=0.00..431.12 rows=400 width=52)
+   Filter: ((c)::text = '1'::text)
+   Root Table: mpp23383_partitioned
+   Partitions Selected: 2
+ Optimizer: pg_orca
+(5 rows)
+
+select * from mpp23383_partitioned where c='1';
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+-- teardown
+-- start_ignore
+drop table mpp23383_partitioned;
+-- end_ignore
+-- bfv_mpp23383_partitioned_setup.sql
+create table mpp23383_partitioned(a int, b varchar(20), c varchar(20), d varchar(20))
+partition by range(a);
+create table mpp23383_partitioned_p1 partition of mpp23383_partitioned
+  for values from (1) to (500);
+create table mpp23383_partitioned_p2 partition of mpp23383_partitioned
+  for values from (500) to (1001);
+insert into mpp23383_partitioned select g,g,g,g from generate_series(1,1000) g;
+create index idx_b on mpp23383_partitioned(b);
+-- heterogenous indexes
+create index idx_c on mpp23383_partitioned_p1(c);
+create index idx_cd on mpp23383_partitioned_p2(c,d);
+-- bfv_mpp23383_partitioned.sql
+explain select * from mpp23383_partitioned where b='1';
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Append  (cost=4.29..14.87 rows=5 width=178)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=4.29..7.41 rows=2 width=178)
+         Recheck Cond: ((b)::text = '1'::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+               Index Cond: ((b)::text = '1'::text)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=4.30..7.43 rows=3 width=178)
+         Recheck Cond: ((b)::text = '1'::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p2_b_idx  (cost=0.00..4.29 rows=3 width=0)
+               Index Cond: ((b)::text = '1'::text)
+(9 rows)
+
+select * from mpp23383_partitioned where b='1';
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+explain select * from mpp23383_partitioned where '1'=b;
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ Append  (cost=4.29..14.87 rows=5 width=178)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=4.29..7.41 rows=2 width=178)
+         Recheck Cond: ('1'::text = (b)::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+               Index Cond: ((b)::text = '1'::text)
+   ->  Bitmap Heap Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=4.30..7.43 rows=3 width=178)
+         Recheck Cond: ('1'::text = (b)::text)
+         ->  Bitmap Index Scan on mpp23383_partitioned_p2_b_idx  (cost=0.00..4.29 rows=3 width=0)
+               Index Cond: ((b)::text = '1'::text)
+(9 rows)
+
+select * from mpp23383_partitioned where '1'=b;
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+explain select * from mpp23383_partitioned where '2'> b order by a limit 10;
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=27.36..27.39 rows=10 width=178)
+   ->  Sort  (cost=27.36..28.19 rows=333 width=178)
+         Sort Key: mpp23383_partitioned.a
+         ->  Append  (cost=0.00..20.16 rows=333 width=178)
+               ->  Seq Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=0.00..9.24 rows=166 width=178)
+                     Filter: ('2'::text > (b)::text)
+               ->  Seq Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=0.00..9.26 rows=167 width=178)
+                     Filter: ('2'::text > (b)::text)
+(8 rows)
+
+select * from mpp23383_partitioned where '2'> b order by a limit 10;
+ a  | b  | c  | d  
+----+----+----+----
+  1 | 1  | 1  | 1
+ 10 | 10 | 10 | 10
+ 11 | 11 | 11 | 11
+ 12 | 12 | 12 | 12
+ 13 | 13 | 13 | 13
+ 14 | 14 | 14 | 14
+ 15 | 15 | 15 | 15
+ 16 | 16 | 16 | 16
+ 17 | 17 | 17 | 17
+ 18 | 18 | 18 | 18
+(10 rows)
+
+explain select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=14.96..14.97 rows=5 width=178)
+   ->  Sort  (cost=14.96..14.97 rows=5 width=178)
+         Sort Key: mpp23383_partitioned.a
+         ->  Append  (cost=4.29..14.90 rows=5 width=178)
+               ->  Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned_1  (cost=4.29..7.42 rows=2 width=178)
+                     Recheck Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+                     ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+                           Index Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+               ->  Bitmap Heap Scan on mpp23383_partitioned_p2 mpp23383_partitioned_2  (cost=4.30..7.45 rows=3 width=178)
+                     Recheck Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+                     ->  Bitmap Index Scan on mpp23383_partitioned_p2_b_idx  (cost=0.00..4.30 rows=3 width=0)
+                           Index Cond: (((b)::text >= '1'::text) AND ((b)::text <= '2'::text))
+(12 rows)
+
+select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
+ a  | b  | c  | d  
+----+----+----+----
+  1 | 1  | 1  | 1
+  2 | 2  | 2  | 2
+ 10 | 10 | 10 | 10
+ 11 | 11 | 11 | 11
+ 12 | 12 | 12 | 12
+ 13 | 13 | 13 | 13
+ 14 | 14 | 14 | 14
+ 15 | 15 | 15 | 15
+ 16 | 16 | 16 | 16
+ 17 | 17 | 17 | 17
+(10 rows)
+
+-- predicates on both index and non-index key
+explain select * from mpp23383_partitioned where b='1' and a='1';
+                                              QUERY PLAN                                              
+------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on mpp23383_partitioned_p1 mpp23383_partitioned  (cost=4.29..7.42 rows=1 width=178)
+   Recheck Cond: ((b)::text = '1'::text)
+   Filter: (a = 1)
+   ->  Bitmap Index Scan on mpp23383_partitioned_p1_b_idx  (cost=0.00..4.29 rows=2 width=0)
+         Index Cond: ((b)::text = '1'::text)
+(5 rows)
+
+select * from mpp23383_partitioned where b='1' and a='1';
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+--negative tests: no index scan plan possible, fall back to planner
+explain select * from mpp23383_partitioned where b::int='1';
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Custom Scan (DynamicTableScan)  (cost=0.00..431.12 rows=400 width=52)
+   Filter: ((b)::integer = 1)
+   Root Table: mpp23383_partitioned
+   Partitions Selected: 2
+ Optimizer: pg_orca
+(5 rows)
+
+-- heterogenous indexes
+explain select * from mpp23383_partitioned where c='1';
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Custom Scan (DynamicTableScan)  (cost=0.00..431.12 rows=400 width=52)
+   Filter: ((c)::text = '1'::text)
+   Root Table: mpp23383_partitioned
+   Partitions Selected: 2
+ Optimizer: pg_orca
+(5 rows)
+
+select * from mpp23383_partitioned where c='1';
+ a | b | c | d 
+---+---+---+---
+ 1 | 1 | 1 | 1
+(1 row)
+
+-- query01_setup.sql
+drop table if exists test;
+create table test (a integer, b integer);
+insert into test select a, a%25 from generate_series(1,100) a;
+create index test_b on test (b);
+-- query01.sql
+-- start_ignore
+-- LAST MODIFIED:
+--     2009-07-17 mgilkey
+--         Added "order" directive.  Because this specifies columns by
+--         position, not name, it requires that the columns come out in a
+--         known order, so I changed the "SELECT" clauses to specify the
+--         columns individually rather than use "SELECT *".
+--         I also changed the "explain analyze ..." to specify column names, 
+--         too, so that we would be analyzing exactly the same statement as 
+--         we are executing.
+set enable_seqscan=off;
+set enable_bitmapscan=off;
+set enable_indexscan=on;
+explain analyze select a, b from test where b=10 order by b desc;
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=0.00..0.07 rows=40 width=8) (actual time=0.048..0.048 rows=4.00 loops=1)
+   Sort Key: b DESC
+   Sort Method: quicksort  Memory: 25kB
+   Buffers: shared hit=1 read=2
+   ->  Index Scan using test_b on test  (cost=0.00..0.06 rows=40 width=8) (actual time=0.044..0.045 rows=4.00 loops=1)
+         Index Cond: (b = 10)
+         Index Searches: 1
+         Buffers: shared hit=1 read=2
+ Planning:
+   Buffers: shared hit=38
+ Planning Time: 2.393 ms
+ Optimizer: pg_orca
+ Execution Time: 0.054 ms
+(13 rows)
+
+-- end_ignore
+-- order 2
+select a, b from test where b=10 order by b desc;
+ a  | b  
+----+----
+ 10 | 10
+ 35 | 10
+ 60 | 10
+ 85 | 10
+(4 rows)
+
+-- query02_setup.sql
+drop table if exists test;
+create table test (a integer, b integer);
+insert into test select a%10, a%25 from generate_series(1,100) a;
+create index t_ab on test (a,b);
+-- query02.sql
+-- start_ignore
+set enable_bitmapscan=off;
+set enable_seqscan=off;
+set enable_indexscan=on;
+-- eng_ignore
+select * from test where (a,b) < (0,10);
+ a | b 
+---+---
+ 0 | 0
+ 0 | 0
+ 0 | 5
+ 0 | 5
+(4 rows)
+
+-- bfv_mpp23383_nonpartitioned_teardown.sql
+drop table mpp23383;
+-- bfv_mpp23383_partitioned_teardown.sql
+drop table mpp23383_partitioned;

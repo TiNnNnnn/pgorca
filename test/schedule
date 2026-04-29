@@ -1,3 +1,9 @@
 test: base
 test: dpe
 test: olap_mdqa
+test: query_window
+test: query_uniontypes
+test: query_aggfunc
+test: query_regexp
+test: query_correlated_subquery
+test: query_indexscan

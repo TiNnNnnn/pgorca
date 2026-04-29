@@ -1,0 +1,74 @@
+-- pg_orca window regression tests
+-- Ported from Greenplum testrepo/query/window
+LOAD 'pg_orca';
+SET pg_orca.enable_orca = on;
+SET client_min_messages = warning;
+-- bfv_mpp24122_setup.sql
+DROP TABLE IF EXISTS x_outer;
+DROP TABLE IF EXISTS y_inner;
+create table x_outer (a int, b int, c int);
+create table y_inner (d int, e int);
+insert into x_outer select i%3, i, i from generate_series(1,10) i;
+insert into y_inner select i%3, i from generate_series(1,10) i;
+analyze x_outer;
+analyze y_inner;
+-- bfv_mpp24122.sql
+select * from x_outer where a in (select row_number() over(partition by a) from y_inner) order by 1, 2;
+ a | b  | c  
+---+----+----
+ 1 |  1 |  1
+ 1 |  4 |  4
+ 1 |  7 |  7
+ 1 | 10 | 10
+ 2 |  2 |  2
+ 2 |  5 |  5
+ 2 |  8 |  8
+(7 rows)
+
+select * from x_outer where a in (select rank() over(order by a) from y_inner) order by 1, 2;
+ a | b  | c  
+---+----+----
+ 1 |  1 |  1
+ 1 |  4 |  4
+ 1 |  7 |  7
+ 1 | 10 | 10
+(4 rows)
+
+select * from x_outer where a not in (select rank() over(order by a) from y_inner) order by 1, 2;
+ a | b | c 
+---+---+---
+ 0 | 3 | 3
+ 0 | 6 | 6
+ 0 | 9 | 9
+ 2 | 2 | 2
+ 2 | 5 | 5
+ 2 | 8 | 8
+(6 rows)
+
+select * from x_outer where exists (select rank() over(order by a) from y_inner where d = a) order by 1, 2;
+ a | b  | c  
+---+----+----
+ 0 |  3 |  3
+ 0 |  6 |  6
+ 0 |  9 |  9
+ 1 |  1 |  1
+ 1 |  4 |  4
+ 1 |  7 |  7
+ 1 | 10 | 10
+ 2 |  2 |  2
+ 2 |  5 |  5
+ 2 |  8 |  8
+(10 rows)
+
+select * from x_outer where not exists (select rank() over(order by a) from y_inner where d = a) order by 1, 2;
+ a | b | c 
+---+---+---
+(0 rows)
+
+select * from x_outer where a in (select last_value(d) over(partition by b order by e rows between e preceding and e+1 following) from y_inner) order by 1, 2;
+ERROR:  argument of ROWS must not contain variables
+LINE 1: ...ue(d) over(partition by b order by e rows between e precedin...
+                                                             ^
+-- Cleanup
+DROP TABLE IF EXISTS x_outer;
+DROP TABLE IF EXISTS y_inner;

@@ -1,0 +1,466 @@
+-- pg_orca uniontypes regression tests
+-- Ported from Greenplum testrepo/query/uniontypes
+LOAD 'pg_orca';
+SET pg_orca.enable_orca = on;
+SET client_min_messages = warning;
+-- setup/setup.sql
+--start_ignore
+DROP TABLE IF EXISTS T1 CASCADE;
+DROP TABLE IF EXISTS T2 CASCADE;
+--end_ignore
+CREATE TABLE T1 (col1 int, col2 int);
+CREATE TABLE T2 (col1 int, col2 int);
+insert into T1 values (1, 1), (1, 2), (2, 1), (2, 2);
+insert into T2 values (3, 1), (3, 2), (4, 1), (4, 2);
+-- query00.sql
+    -- Original bug repro
+    DROP TABLE IF EXISTS T1 CASCADE;
+    DROP TABLE IF EXISTS T2 CASCADE;
+    CREATE TABLE T1 (col1 int, col2 int);
+    CREATE TABLE T2 (col1 int, col2 int);
+    insert into T1 values (1, 1), (1, 2), (2, 1), (2, 2);
+    insert into T2 values (3, 1), (3, 2), (4, 1), (4, 2);
+    select distinct col1, null as col2 from t1 order by col1, col2;
+ col1 | col2 
+------+------
+    1 | 
+    2 | 
+(2 rows)
+
+    select distinct col1, col2 from t2 order by col1, col2;
+ col1 | col2 
+------+------
+    3 |    1
+    3 |    2
+    4 |    1
+    4 |    2
+(4 rows)
+
+-- query01.sql
+    -- Confirmed after the fix the following UNION query 
+    -- works correctly
+    select * from (
+      select distinct col1, null::integer as col2 
+      from t1 
+      union 
+      select distinct col1, col2 from t2) 
+    as mytab order by col1, col2;
+ col1 | col2 
+------+------
+    1 |     
+    2 |     
+    3 |    1
+    3 |    2
+    4 |    1
+    4 |    2
+(6 rows)
+
+    -- Confired can successfully create view
+    drop view if exists hv_1;
+    create view hv_1 as (
+      select distinct col1, null::integer as col2 
+      from t1 
+      union 
+      select distinct col1, col2 from t2);
+    \d hv_1
+                View "public.hv_1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ col1   | integer |           |          | 
+ col2   | integer |           |          | 
+
+    -- Without DISTINCT keyword
+    select * from (
+      select col1, null::integer as col2 from t1 
+      union 
+      select col1, col2 from t2) 
+    as mytab order by col1, col2;
+ col1 | col2 
+------+------
+    1 |     
+    2 |     
+    3 |    1
+    3 |    2
+    4 |    1
+    4 |    2
+(6 rows)
+
+    -- Confirmed the following work around suggested before 
+    -- the fix was available still works
+    -- coerce int to text
+    select * from (
+      select distinct col1, null as col2 from t1 
+      union 
+      select distinct col1, col2::text from t2) 
+    as mytab order by col1, col2; 
+ col1 | col2 
+------+------
+    1 | 
+    2 | 
+    3 | 1
+    3 | 2
+    4 | 1
+    4 | 2
+(6 rows)
+
+    -- Confirmed another work around: coerce null to int
+    select * from (
+      select distinct col1, null:: int as col2 from t1 
+      union 
+      select distinct col1, col2 from t2) 
+    as mytab order by col1, col2; 
+ col1 | col2 
+------+------
+    1 |     
+    2 |     
+    3 |    1
+    3 |    2
+    4 |    1
+    4 |    2
+(6 rows)
+
+    -- Confirmed without using DISTINCT keyword,
+    -- UNION query still works correctly
+    select col1, null as col2 from t1 
+    union 
+    select distinct col1, col2 from t2
+    order by col1, col2;
+ col1 | col2 
+------+------
+    1 |     
+    2 |     
+    3 |    1
+    3 |    2
+    4 |    1
+    4 |    2
+(6 rows)
+
+    -- Implicitly convert null to int via null+0
+    -- This still works fine.
+    select distinct col1, null+0 as col2 from t1 
+    union 
+    select distinct col1, col2 from t2
+    order by col1, col2;
+ col1 | col2 
+------+------
+    1 |     
+    2 |     
+    3 |    1
+    3 |    2
+    4 |    1
+    4 |    2
+(6 rows)
+
+-- query02.sql
+    -- Additional queries to check data type conversion for UNION from Brian's comment
+    select null::integer as x union select 1::integer as x order by x;
+ x 
+---
+ 1
+  
+(2 rows)
+
+    select null::text as x union select 1::text as x order by x;
+ x 
+---
+ 1
+ 
+(2 rows)
+
+    select distinct null::integer as x union select 1::integer as x order by x;
+ x 
+---
+ 1
+  
+(2 rows)
+
+-- query03.sql
+-- A script to check consistency between pre-fix and post-fix of MPP-11377
+SET client_min_messages TO warning;
+DROP VIEW IF EXISTS v1 CASCADE;
+CREATE VIEW v1 AS SELECT '1' AS a UNION SELECT NULL;
+\d+ v1
+                            View "public.v1"
+ Column | Type | Collation | Nullable | Default | Storage  | Description 
+--------+------+-----------+----------+---------+----------+-------------
+ a      | text |           |          |         | extended | 
+View definition:
+ SELECT '1'::text AS a
+UNION
+ SELECT NULL::text AS a;
+
+DROP VIEW IF EXISTS v2 CASCADE;
+CREATE VIEW v2 AS SELECT 1 AS a UNION SELECT NULL;
+\d+ v2
+                             View "public.v2"
+ Column |  Type   | Collation | Nullable | Default | Storage | Description 
+--------+---------+-----------+----------+---------+---------+-------------
+ a      | integer |           |          |         | plain   | 
+View definition:
+ SELECT 1 AS a
+UNION
+ SELECT NULL::integer AS a;
+
+DROP VIEW IF EXISTS v3 CASCADE;
+CREATE VIEW v3 AS SELECT NULL UNION SELECT NULL;
+\d+ v3
+                             View "public.v3"
+  Column  | Type | Collation | Nullable | Default | Storage  | Description 
+----------+------+-----------+----------+---------+----------+-------------
+ ?column? | text |           |          |         | extended | 
+View definition:
+ SELECT NULL::text AS "?column?"
+UNION
+ SELECT NULL::text;
+
+DROP VIEW IF EXISTS v4 CASCADE;
+CREATE VIEW v4 AS SELECT NULL::int UNION SELECT NULL;
+\d+ v4
+                             View "public.v4"
+ Column |  Type   | Collation | Nullable | Default | Storage | Description 
+--------+---------+-----------+----------+---------+---------+-------------
+ int4   | integer |           |          |         | plain   | 
+View definition:
+ SELECT NULL::integer AS int4
+UNION
+ SELECT NULL::integer AS int4;
+
+DROP VIEW IF EXISTS v5 CASCADE;
+CREATE VIEW v5 AS SELECT a::int FROM v1 UNION SELECT NULL;
+\d+ v5
+                             View "public.v5"
+ Column |  Type   | Collation | Nullable | Default | Storage | Description 
+--------+---------+-----------+----------+---------+---------+-------------
+ a      | integer |           |          |         | plain   | 
+View definition:
+ SELECT v1.a::integer AS a
+   FROM v1
+UNION
+ SELECT NULL::integer AS a;
+
+DROP VIEW IF EXISTS v6 CASCADE;
+CREATE VIEW v6 AS SELECT 1 INTERSECT SELECT 1;
+\d+ v6
+                              View "public.v6"
+  Column  |  Type   | Collation | Nullable | Default | Storage | Description 
+----------+---------+-----------+----------+---------+---------+-------------
+ ?column? | integer |           |          |         | plain   | 
+View definition:
+ SELECT 1 AS "?column?"
+INTERSECT
+ SELECT 1;
+
+DROP VIEW IF EXISTS v7 CASCADE;
+CREATE VIEW v7 AS SELECT '1' EXCEPT SELECT 1;
+\d+ v7
+                              View "public.v7"
+  Column  |  Type   | Collation | Nullable | Default | Storage | Description 
+----------+---------+-----------+----------+---------+---------+-------------
+ ?column? | integer |           |          |         | plain   | 
+View definition:
+ SELECT 1 AS "?column?"
+EXCEPT
+ SELECT 1;
+
+DROP VIEW IF EXISTS v8 CASCADE;
+CREATE VIEW v8 AS SELECT a, b FROM (VALUES(1::int, '1'::text))s (a, b) UNION SELECT 0, '';
+\d+ v8
+                              View "public.v8"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Description 
+--------+---------+-----------+----------+---------+----------+-------------
+ a      | integer |           |          |         | plain    | 
+ b      | text    |           |          |         | extended | 
+View definition:
+ SELECT s.a,
+    s.b
+   FROM ( VALUES (1,'1'::text)) s(a, b)
+UNION
+ SELECT 0 AS a,
+    ''::text AS b;
+
+DROP VIEW IF EXISTS v9 CASCADE;
+CREATE VIEW v9 AS SELECT a, b FROM (VALUES(1, '1'))s (a, b) UNION SELECT 0, '';
+\d+ v9
+                              View "public.v9"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Description 
+--------+---------+-----------+----------+---------+----------+-------------
+ a      | integer |           |          |         | plain    | 
+ b      | text    |           |          |         | extended | 
+View definition:
+ SELECT s.a,
+    s.b
+   FROM ( VALUES (1,'1'::text)) s(a, b)
+UNION
+ SELECT 0 AS a,
+    ''::text AS b;
+
+DROP VIEW IF EXISTS v10 CASCADE;
+CREATE VIEW v10 AS SELECT a, b FROM (VALUES(1, '1'))s (a, b) UNION SELECT '0', '';
+\d+ v10
+                             View "public.v10"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Description 
+--------+---------+-----------+----------+---------+----------+-------------
+ a      | integer |           |          |         | plain    | 
+ b      | text    |           |          |         | extended | 
+View definition:
+ SELECT s.a,
+    s.b
+   FROM ( VALUES (1,'1'::text)) s(a, b)
+UNION
+ SELECT 0 AS a,
+    ''::text AS b;
+
+DROP VIEW IF EXISTS v11 CASCADE;
+CREATE VIEW v11 AS SELECT 'foo'::information_schema.sql_identifier UNION ALL SELECT 'bar'::information_schema.sql_identifier;
+\d+ v11
+                                              View "public.v11"
+     Column     |               Type                | Collation | Nullable | Default | Storage | Description 
+----------------+-----------------------------------+-----------+----------+---------+---------+-------------
+ sql_identifier | information_schema.sql_identifier |           |          |         | plain   | 
+View definition:
+ SELECT 'foo'::name::information_schema.sql_identifier AS sql_identifier
+UNION ALL
+ SELECT 'bar'::name::information_schema.sql_identifier AS sql_identifier;
+
+DROP VIEW IF EXISTS v12 CASCADE;
+CREATE VIEW v12 AS SELECT 'foo'::information_schema.sql_identifier UNION ALL SELECT DISTINCT 'bar'::information_schema.sql_identifier;
+\d+ v12
+                                              View "public.v12"
+     Column     |               Type                | Collation | Nullable | Default | Storage | Description 
+----------------+-----------------------------------+-----------+----------+---------+---------+-------------
+ sql_identifier | information_schema.sql_identifier |           |          |         | plain   | 
+View definition:
+ SELECT 'foo'::name::information_schema.sql_identifier AS sql_identifier
+UNION ALL
+ SELECT DISTINCT 'bar'::name::information_schema.sql_identifier AS sql_identifier;
+
+DROP VIEW IF EXISTS v13 CASCADE;
+CREATE VIEW v13 AS SELECT 1 a, NULL b, NULL c UNION SELECT 2, 3, NULL UNION SELECT 3, NULL, 4;
+ERROR:  UNION types text and integer cannot be matched
+LINE 1: ...L b, NULL c UNION SELECT 2, 3, NULL UNION SELECT 3, NULL, 4;
+                                                                     ^
+\d+ v13
+DROP VIEW IF EXISTS v14 CASCADE;
+CREATE VIEW v14 AS SELECT 1 a, NULL b, NULL::integer c UNION SELECT 2, 3, NULL UNION SELECT 3, NULL, 4;
+\d+ v14
+                             View "public.v14"
+ Column |  Type   | Collation | Nullable | Default | Storage | Description 
+--------+---------+-----------+----------+---------+---------+-------------
+ a      | integer |           |          |         | plain   | 
+ b      | integer |           |          |         | plain   | 
+ c      | integer |           |          |         | plain   | 
+View definition:
+ SELECT 1 AS a,
+    NULL::integer AS b,
+    NULL::integer AS c
+UNION
+ SELECT 2 AS a,
+    3 AS b,
+    NULL::integer AS c
+UNION
+ SELECT 3 AS a,
+    NULL::integer AS b,
+    4 AS c;
+
+-- DROP VIEW IF EXISTS v15 CASCADE;
+-- CREATE VIEW v15 AS SELECT 'char5'::bpchar::character(5) AS bpchar UNION SELECT DISTINCT 'abcde'::bpchar::character(5);
+-- \d+ v15
+DROP VIEW IF EXISTS v16 CASCADE;
+CREATE VIEW v16 AS SELECT ARRAY[1, 2, 3] UNION SELECT ARRAY(SELECT 1);
+\d+ v16
+                              View "public.v16"
+ Column |   Type    | Collation | Nullable | Default | Storage  | Description 
+--------+-----------+-----------+----------+---------+----------+-------------
+ array  | integer[] |           |          |         | extended | 
+View definition:
+ SELECT ARRAY[1, 2, 3] AS "array"
+UNION
+ SELECT ARRAY( SELECT 1) AS "array";
+
+-- query04.sql
+-- Problem:
+-- User defined function returning union of values 
+-- generated by generate_series gives "Unexpected internal error" 
+-- when used in subquery
+-- Create test function
+create or replace function mpp16589_ugen() returns setof integer as 
+'select generate_series(1,10) union all 
+select generate_series(1,10)' 
+language sql;
+select mpp16589_ugen() order by 1;
+ mpp16589_ugen 
+---------------
+             1
+             1
+             2
+             2
+             3
+             3
+             4
+             4
+             5
+             5
+             6
+             6
+             7
+             7
+             8
+             8
+             9
+             9
+            10
+            10
+(20 rows)
+
+-- Created table mpp16589_t1 having one integer attribute and some values. 
+drop table if exists mpp16589_t1;
+create table mpp16589_t1(x int);
+insert into mpp16589_t1 values (1),(2),(3);
+-- Before the fix, try to select values of mpp16589_t1 
+-- that are present in union of values returned by this function 
+-- we would get error
+select * from mpp16589_t1 where x in 
+(select mpp16589_ugen() union all select mpp16589_ugen())
+order by x;
+ x 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+-- Check in sub-query calling function that using UNION (not UNION ALL)
+create or replace function mpp16589_uogen() returns setof integer as 
+'select generate_series(1,10) union select generate_series(1,10)' 
+language sql;
+select mpp16589_uogen() order by 1;
+ mpp16589_uogen 
+----------------
+              1
+              2
+              3
+              4
+              5
+              6
+              7
+              8
+              9
+             10
+(10 rows)
+
+select * from mpp16589_t1 where x in (select mpp16589_uogen()) order by x;
+ x 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+-- Clean up
+DROP FUNCTION IF EXISTS mpp16589_uogen(); 
+DROP FUNCTION IF EXISTS mpp16589_ugen(); 
+drop table if exists mpp16589_t1;
+-- Cleanup
+DROP TABLE IF EXISTS T1 CASCADE;
+DROP TABLE IF EXISTS T2 CASCADE;
+DROP VIEW IF EXISTS hv_1;
