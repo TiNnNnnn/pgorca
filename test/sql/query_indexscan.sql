@@ -14,24 +14,24 @@ create index mpp23383_b on mpp23383(b);
 
 -- bfv_mpp23383_nonpartitioned.sql
 
-EXPLAIN select * from mpp23383 where b='1';
+EXPLAIN (COSTS OFF) select * from mpp23383 where b='1';
 select * from mpp23383 where b='1';
 
-EXPLAIN select * from mpp23383 where '1'=b;
+EXPLAIN (COSTS OFF) select * from mpp23383 where '1'=b;
 select * from mpp23383 where '1'=b;
 
-EXPLAIN select * from mpp23383 where '2'> b order by a limit 10;
+EXPLAIN (COSTS OFF) select * from mpp23383 where '2'> b order by a limit 10;
 select * from mpp23383 where '2'> b order by a limit 10;
 
-EXPLAIN select * from mpp23383 where b between '1' and '2' order by a limit 10;
+EXPLAIN (COSTS OFF) select * from mpp23383 where b between '1' and '2' order by a limit 10;
 select * from mpp23383 where b between '1' and '2' order by a limit 10;
 
 -- predicates on both index and non-index key
-EXPLAIN select * from mpp23383 where b='1' and a='1';
+EXPLAIN (COSTS OFF) select * from mpp23383 where b='1' and a='1';
 select * from mpp23383 where b='1' and a='1';
 
 --negative tests: no index scan plan possible, fall back to planner
-EXPLAIN select * from mpp23383 where b::int='1';
+EXPLAIN (COSTS OFF) select * from mpp23383 where b::int='1';
 
 
 -- bfv_mpp23383_partitioned.50.sql
@@ -52,27 +52,27 @@ create index idx_c on mpp23383_partitioned_p1(c);
 create index idx_cd on mpp23383_partitioned_p2(c,d);
 -- end_ignore
 
-explain select * from mpp23383_partitioned where b='1';
+explain (costs off) select * from mpp23383_partitioned where b='1';
 select * from mpp23383_partitioned where b='1';
 
-explain select * from mpp23383_partitioned where '1'=b;
+explain (costs off) select * from mpp23383_partitioned where '1'=b;
 select * from mpp23383_partitioned where '1'=b;
 
-explain select * from mpp23383_partitioned where '2'> b order by a limit 10;
+explain (costs off) select * from mpp23383_partitioned where '2'> b order by a limit 10;
 select * from mpp23383_partitioned where '2'> b order by a limit 10;
 
-explain select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
+explain (costs off) select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
 select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
 
 -- predicates on both index and non-index key
-explain select * from mpp23383_partitioned where b='1' and a='1';
+explain (costs off) select * from mpp23383_partitioned where b='1' and a='1';
 select * from mpp23383_partitioned where b='1' and a='1';
 
 --negative tests: no index scan plan possible, fall back to planner
-explain select * from mpp23383_partitioned where b::int='1';
+explain (costs off) select * from mpp23383_partitioned where b::int='1';
 
 -- heterogenous indexes
-explain select * from mpp23383_partitioned where c='1';
+explain (costs off) select * from mpp23383_partitioned where c='1';
 select * from mpp23383_partitioned where c='1';
 -- teardown
 -- start_ignore
@@ -96,27 +96,27 @@ create index idx_cd on mpp23383_partitioned_p2(c,d);
 
 -- bfv_mpp23383_partitioned.sql
 
-explain select * from mpp23383_partitioned where b='1';
+explain (costs off) select * from mpp23383_partitioned where b='1';
 select * from mpp23383_partitioned where b='1';
 
-explain select * from mpp23383_partitioned where '1'=b;
+explain (costs off) select * from mpp23383_partitioned where '1'=b;
 select * from mpp23383_partitioned where '1'=b;
 
-explain select * from mpp23383_partitioned where '2'> b order by a limit 10;
+explain (costs off) select * from mpp23383_partitioned where '2'> b order by a limit 10;
 select * from mpp23383_partitioned where '2'> b order by a limit 10;
 
-explain select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
+explain (costs off) select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
 select * from mpp23383_partitioned where b between '1' and '2' order by a limit 10;
 
 -- predicates on both index and non-index key
-explain select * from mpp23383_partitioned where b='1' and a='1';
+explain (costs off) select * from mpp23383_partitioned where b='1' and a='1';
 select * from mpp23383_partitioned where b='1' and a='1';
 
 --negative tests: no index scan plan possible, fall back to planner
-explain select * from mpp23383_partitioned where b::int='1';
+explain (costs off) select * from mpp23383_partitioned where b::int='1';
 
 -- heterogenous indexes
-explain select * from mpp23383_partitioned where c='1';
+explain (costs off) select * from mpp23383_partitioned where c='1';
 select * from mpp23383_partitioned where c='1';
 
 
