@@ -7,3 +7,4 @@ test: query_aggfunc
 test: query_regexp
 test: query_correlated_subquery
 test: query_indexscan
+test: query_cursors
