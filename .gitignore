@@ -1,4 +1,6 @@
 build/
+build-release/
+test/results/
 *.o
 *.so
 *.dylib
