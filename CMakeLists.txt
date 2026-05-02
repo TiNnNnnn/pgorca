@@ -225,6 +225,10 @@ target_include_directories(pg_orca PRIVATE
 
 target_link_libraries(pg_orca PRIVATE ${XERCES_LIB})
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(pg_orca PRIVATE dl)
+endif()
+
 # -------------------------------------------------------------------
 # Install
 # -------------------------------------------------------------------
@@ -284,3 +288,7 @@ target_include_directories(gporca_test PRIVATE
 )
 
 target_link_libraries(gporca_test PRIVATE ${XERCES_LIB})
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(gporca_test PRIVATE dl)
+endif()
