@@ -244,3 +244,43 @@ install(FILES
     pg_orca.control
     pg_orca--1.0.sql
     DESTINATION "${PG_SHAREDIR}/extension")
+
+# -------------------------------------------------------------------
+# gporca_test — standalone ORCA optimizer test binary
+# Supports: -d <file.mdp>  execute a minidump
+#           -p             print the resulting DXL plan
+#           -i <plan_id>   select a specific plan (enables enumeration)
+#           -T <flag>      set a trace flag
+# -------------------------------------------------------------------
+add_executable(gporca_test
+    tools/gporca_test/main.cpp
+    $<TARGET_OBJECTS:orca_core>
+)
+
+target_compile_definitions(gporca_test PRIVATE
+    $<$<CONFIG:Debug>:GPOS_DEBUG>
+    USE_CMAKE
+)
+
+target_compile_options(gporca_test PRIVATE
+    -Wall
+    -Wno-unused-parameter
+    -Wno-sign-compare
+)
+
+target_include_directories(gporca_test PRIVATE
+    ${CMAKE_SOURCE_DIR}/libgpos/include
+    ${CMAKE_SOURCE_DIR}/libnaucrates/include
+    ${CMAKE_SOURCE_DIR}/libgpopt/include
+    ${CMAKE_SOURCE_DIR}/libgpdbcost/include
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/compat
+    SYSTEM
+    ${PG_SERVER_INCLUDEDIR}
+    ${PG_INCLUDEDIR}
+    ${XERCES_INCLUDE}
+    ${EXTRA_SYSTEM_INCLUDES}
+)
+
+target_link_libraries(gporca_test PRIVATE ${XERCES_LIB})

@@ -59,7 +59,7 @@ CParseHandlerWindowOids::StartElement(const XMLCh *const,  //element_uri,
 		EdxltokenWindowOids);
 	OID dense_rank_oid = CDXLOperatorFactory::ExtractConvertAttrValueToOid(
 		m_parse_handler_mgr->GetDXLMemoryManager(), attrs, EdxltokenOidDenseRank,
-		EdxltokenWindowOids);
+		EdxltokenWindowOids, true /*is_optional*/, 0 /*OidDefaultValue*/);
 
 	m_window_oids = GPOS_NEW(m_mp) CWindowOids(m_mp, row_number_oid, rank_oid, dense_rank_oid);
 }
