@@ -86,7 +86,7 @@ bool  optimizer_print_memo_after_exploration    = false;
 bool  optimizer_print_memo_after_implementation = false;
 bool  optimizer_print_memo_after_optimization   = false;
 bool  optimizer_print_optimization_context      = false;
-bool  optimizer_cte_inlining                    = true;
+bool  optimizer_cte_inlining                    = false;
 
 /* xforms array: indexed by xform id, true means disabled */
 bool  optimizer_xforms[512] = {false};
@@ -668,7 +668,7 @@ void _PG_init(void)
     DefineCustomBoolVariable(
         "optimizer_cte_inlining",
         "Enable CTE inlining in ORCA.",
-        NULL, &optimizer_cte_inlining, true,
+        NULL, &optimizer_cte_inlining, false,
         PGC_USERSET, 0, NULL, NULL, NULL);
 
     DefineCustomBoolVariable(
