@@ -196,7 +196,14 @@ CXformPushJoinBelowUnionAll::Transform(CXformContext *pxfctxt,
 	}
 	other_colref_array->Release();
 
-	CColRefArray *output_columns = pexpr->DeriveOutputColumns()->Pdrgpcr(mp);
+	// output_columns must be in the same positional order as input_columns[0]
+	// (which is child_colref_array[0] + other_colref_array).
+	// Using pexpr->DeriveOutputColumns()->Pdrgpcr() returns a set-ordered
+	// array that may differ from the input order, causing the new UnionAll to
+	// map output column i to the wrong input column i in each child, producing
+	// type mismatches at execution (e.g. xid instead of integer).
+	colref_array_from->AddRef();
+	CColRefArray *output_columns = colref_array_from;
 	CExpression *pexprAlt = GPOS_NEW(mp) CExpression(
 		mp, GPOS_NEW(mp) CLogicalUnionAll(mp, output_columns, input_columns),
 		join_array);
