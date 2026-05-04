@@ -827,31 +827,22 @@ EXPLAIN SELECT * FROM customer WHERE 1+c_custkey IN (SELECT c_nationkey+1 FROM n
 (7 rows)
 
 EXPLAIN VERBOSE SELECT * FROM customer WHERE 2 IN (SELECT n_nationkey + 1 FROM nation);
-                                                                                                            QUERY PLAN                                                                                                             
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Nested Loop  (cost=0.00..1293.21 rows=400 width=56)
+                                                                                   QUERY PLAN                                                                                   
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop Semi Join  (cost=0.00..1293.28 rows=400 width=56)
    Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
    Join Filter: true
    ->  Seq Scan on public.customer  (cost=0.00..431.02 rows=400 width=56)
          Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-   ->  Materialize  (cost=0.00..431.06 rows=1 width=1)
-         ->  Result  (cost=0.00..431.06 rows=1 width=1)
-               Filter: ((CASE WHEN ((count(*)) = '0'::bigint) THEN '0'::bigint WHEN ((count(*)) = (sum((CASE WHEN (((nation.n_nationkey + 1)) IS NULL) THEN 1 ELSE 0 END)))) THEN '-1'::bigint ELSE (count(*)) END) > '0'::bigint)
-               ->  Result  (cost=0.00..431.06 rows=1 width=8)
-                     Output: CASE WHEN ((count(*)) = '0'::bigint) THEN '0'::bigint WHEN ((count(*)) = (sum((CASE WHEN (((nation.n_nationkey + 1)) IS NULL) THEN 1 ELSE 0 END)))) THEN '-1'::bigint ELSE (count(*)) END
-                     ->  Aggregate  (cost=0.00..431.06 rows=1 width=16)
-                           Output: count(*), sum((CASE WHEN (((nation.n_nationkey + 1)) IS NULL) THEN 1 ELSE 0 END))
-                           ->  Result  (cost=0.00..431.06 rows=329 width=4)
-                                 Output: CASE WHEN (((nation.n_nationkey + 1)) IS NULL) THEN 1 ELSE 0 END
-                                 ->  Result  (cost=0.00..431.06 rows=329 width=4)
-                                       Output: ((nation.n_nationkey + 1))
-                                       Filter: ((2 = ((nation.n_nationkey + 1))) OR (((nation.n_nationkey + 1)) IS NULL))
-                                       ->  Result  (cost=0.00..431.03 rows=810 width=4)
-                                             Output: (nation.n_nationkey + 1)
-                                             ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=4)
-                                                   Output: nation.n_nationkey
+   ->  Materialize  (cost=0.00..431.06 rows=324 width=1)
+         ->  Result  (cost=0.00..431.06 rows=324 width=1)
+               Filter: (2 = ((nation.n_nationkey + 1)))
+               ->  Result  (cost=0.00..431.03 rows=810 width=4)
+                     Output: (nation.n_nationkey + 1)
+                     ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=4)
+                           Output: nation.n_nationkey
  Optimizer: pg_orca
-(22 rows)
+(13 rows)
 
 -- Correlated EXISTS
 EXPLAIN VERBOSE SELECT * FROM customer WHERE EXISTS(SELECT n_nationkey FROM nation WHERE nation.n_nationkey<>customer.c_custkey GROUP BY nation.n_nationkey);
