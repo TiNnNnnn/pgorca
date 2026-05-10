@@ -44,9 +44,8 @@ extern MemoryContext MessageContext;
 PlannedStmt *
 CGPOptimizer::GPOPTOptimizedPlan(
 	Query *query,
-	bool *
-		had_unexpected_failure	// output : set to true if optimizer unexpectedly failed to produce plan
-)
+	bool *had_unexpected_failure,
+	bool trace_fallback)
 {
 	SOptContext gpopt_context;
 	PlannedStmt *plStmt = nullptr;
@@ -96,7 +95,17 @@ CGPOptimizer::GPOPTOptimizedPlan(
 		// return without a plan. The caller should fall back to the
 		// Postgres planner.
 
-		/* trace fallback is handled by the caller (pg_orca.cpp) */
+		if (trace_fallback)
+		{
+			if (errstart(INFO, TEXTDOMAIN))
+			{
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+				errmsg("pg_orca: falling back to standard planner");
+				if (serialized_error_msg)
+					errdetail("%s", serialized_error_msg);
+				errfinish(ex.Filename(), ex.Line(), nullptr);
+			}
+		}
 
 		*had_unexpected_failure = gpopt_context.m_is_unexpected_failure;
 
@@ -185,9 +194,10 @@ CGPOptimizer::TerminateGPOPT()
 //---------------------------------------------------------------------------
 extern "C" {
 PlannedStmt *
-GPOPTOptimizedPlan(Query *query, bool *had_unexpected_failure)
+GPOPTOptimizedPlan(Query *query, bool *had_unexpected_failure, bool trace_fallback)
 {
-	return CGPOptimizer::GPOPTOptimizedPlan(query, had_unexpected_failure);
+	return CGPOptimizer::GPOPTOptimizedPlan(query, had_unexpected_failure,
+											trace_fallback);
 }
 }
 

@@ -38,7 +38,8 @@ extern "C" {
 extern "C" {
 extern void        InitGPOPT(void);
 extern void        TerminateGPOPT(void);
-extern PlannedStmt *GPOPTOptimizedPlan(Query *query, bool *had_unexpected_failure);
+extern PlannedStmt *GPOPTOptimizedPlan(Query *query, bool *had_unexpected_failure,
+                                        bool trace_fallback);
 }
 
 extern "C" {
@@ -469,7 +470,8 @@ pg_orca_planner(Query *parse, const char *query_string,
         pqueryCopy = (Query *) transformGroupedWindows((Node *) pqueryCopy, NULL);
 
         bool had_unexpected_failure = false;
-        PlannedStmt *result = GPOPTOptimizedPlan(pqueryCopy, &had_unexpected_failure);
+        PlannedStmt *result = GPOPTOptimizedPlan(pqueryCopy, &had_unexpected_failure,
+                                                  pg_orca_trace_fallback);
 
         if (result != nullptr)
         {
@@ -492,10 +494,6 @@ pg_orca_planner(Query *parse, const char *query_string,
 
             return result;
         }
-
-        if (pg_orca_trace_fallback)
-            elog(INFO, "pg_orca: falling back to standard planner%s",
-                 had_unexpected_failure ? " (unexpected failure)" : "");
     }
 
     if (prev_planner_hook)

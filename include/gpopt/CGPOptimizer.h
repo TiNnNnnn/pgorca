@@ -29,9 +29,8 @@ public:
 	// optimize given query using GP optimizer
 	static PlannedStmt *GPOPTOptimizedPlan(
 		Query *query,
-		bool *
-			had_unexpected_failure	// output : set to true if optimizer unexpectedly failed to produce plan
-	);
+		bool *had_unexpected_failure,
+		bool trace_fallback = false);
 
 	// serialize planned statement into DXL
 	static char *SerializeDXLPlan(Query *query);
@@ -45,7 +44,8 @@ public:
 extern "C" {
 
 extern PlannedStmt *GPOPTOptimizedPlan(Query *query,
-									   bool *had_unexpected_failure);
+									   bool *had_unexpected_failure,
+									   bool trace_fallback);
 extern char *SerializeDXLPlan(Query *query);
 extern void InitGPOPT();
 extern void TerminateGPOPT();
