@@ -192,7 +192,10 @@ CTranslatorQueryToDXL::CTranslatorQueryToDXL(
 	// initialize a new, empty, mapping.
 	if (var_colid_mapping)
 	{
-		m_var_to_colid_map = var_colid_mapping->CopyMapColId(m_mp);
+		// Use query_level-filtered copy so that ancestor-level var mappings
+		// (e.g. varlevelsup > 1 in deeply nested correlated subqueries) are
+		// preserved and reachable from inner translators.
+		m_var_to_colid_map = var_colid_mapping->CopyMapColId(query_level - 1);
 	}
 	else
 	{
