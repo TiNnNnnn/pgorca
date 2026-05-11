@@ -261,16 +261,16 @@ analyze A,B,C;
 \echo '-- force_explain'
 -- force_explain
 explain (costs off) select A.i, B.i, C.j from A, B, C where A.j = C.j;
-           QUERY PLAN            
----------------------------------
- Nested Loop
-   Join Filter: true
-   ->  Hash Join
-         Hash Cond: (c.j = a.j)
+        QUERY PLAN         
+---------------------------
+ Hash Join
+   Hash Cond: (a.j = c.j)
+   ->  Nested Loop
+         Join Filter: true
+         ->  Seq Scan on a
+         ->  Seq Scan on b
+   ->  Hash
          ->  Seq Scan on c
-         ->  Hash
-               ->  Seq Scan on a
-   ->  Seq Scan on b
  Optimizer: pg_orca
 (9 rows)
 
@@ -341,16 +341,16 @@ explain (costs off) select A.i, B.i, C.j from A, B, C where A.j = (select C.j fr
 \echo '-- force_explain'
 -- force_explain
 explain (costs off) select A.i, B.i, C.j from A, B, C where A.j = C.j;
-           QUERY PLAN            
----------------------------------
- Nested Loop
-   Join Filter: true
-   ->  Hash Join
-         Hash Cond: (c.j = a.j)
+        QUERY PLAN         
+---------------------------
+ Hash Join
+   Hash Cond: (a.j = c.j)
+   ->  Nested Loop
+         Join Filter: true
+         ->  Seq Scan on a
+         ->  Seq Scan on b
+   ->  Hash
          ->  Seq Scan on c
-         ->  Hash
-               ->  Seq Scan on a
-   ->  Seq Scan on b
  Optimizer: pg_orca
 (9 rows)
 

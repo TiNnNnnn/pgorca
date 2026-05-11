@@ -624,38 +624,44 @@ EXPLAIN SELECT * FROM orders LEFT JOIN nation ON orders.o_custkey = nation.n_reg
 
 -- Subqueries (IN / EXISTS)
 EXPLAIN VERBOSE SELECT * FROM customer WHERE c_custkey IN (SELECT c_custkey FROM nation);
-                                                                                   QUERY PLAN                                                                                   
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Nested Loop Semi Join  (cost=0.00..1293.19 rows=400 width=56)
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.00..1293.26 rows=400 width=56)
    Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-   Join Filter: true
-   ->  Seq Scan on public.customer  (cost=0.00..431.07 rows=400 width=56)
-         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-         Filter: (customer.c_custkey = customer.c_custkey)
-   ->  Limit  (cost=0.00..431.02 rows=1 width=1)
+   Join Filter: ((count(*)) > '0'::bigint)
+   ->  Aggregate  (cost=0.00..431.02 rows=1 width=8)
+         Output: count(*)
          ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=1)
+   ->  Materialize  (cost=0.00..431.10 rows=400 width=56)
+         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
+         ->  Seq Scan on public.customer  (cost=0.00..431.07 rows=400 width=56)
+               Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
+               Filter: (customer.c_custkey = customer.c_custkey)
  Optimizer: pg_orca
-(9 rows)
+(12 rows)
 
 EXPLAIN VERBOSE SELECT * FROM customer x WHERE c_custkey IN (SELECT x.c_nationkey FROM nation);
-                                                       QUERY PLAN                                                       
-------------------------------------------------------------------------------------------------------------------------
- Nested Loop Semi Join  (cost=0.00..1293.12 rows=160 width=56)
+                                                          QUERY PLAN                                                          
+------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.00..1293.15 rows=160 width=56)
    Output: x.c_custkey, x.c_name, x.c_address, x.c_nationkey, x.c_phone, x.c_acctbal, x.c_mktsegment, x.c_comment
-   Join Filter: true
-   ->  Seq Scan on public.customer x  (cost=0.00..431.06 rows=160 width=56)
-         Output: x.c_custkey, x.c_name, x.c_address, x.c_nationkey, x.c_phone, x.c_acctbal, x.c_mktsegment, x.c_comment
-         Filter: (x.c_custkey = x.c_nationkey)
-   ->  Limit  (cost=0.00..431.02 rows=1 width=1)
+   Join Filter: ((count(*)) > '0'::bigint)
+   ->  Aggregate  (cost=0.00..431.02 rows=1 width=8)
+         Output: count(*)
          ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=1)
+   ->  Materialize  (cost=0.00..431.07 rows=160 width=56)
+         Output: x.c_custkey, x.c_name, x.c_address, x.c_nationkey, x.c_phone, x.c_acctbal, x.c_mktsegment, x.c_comment
+         ->  Seq Scan on public.customer x  (cost=0.00..431.06 rows=160 width=56)
+               Output: x.c_custkey, x.c_name, x.c_address, x.c_nationkey, x.c_phone, x.c_acctbal, x.c_mktsegment, x.c_comment
+               Filter: (x.c_custkey = x.c_nationkey)
  Optimizer: pg_orca
-(9 rows)
+(12 rows)
 
 -- Self-join (non-equi)
 EXPLAIN VERBOSE SELECT * FROM customer a JOIN customer b ON a.c_custkey != b.c_custkey;
                                                                                                         QUERY PLAN                                                                                                        
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Nested Loop  (cost=0.00..1308.86 rows=400 width=112)
+ Nested Loop  (cost=0.00..173285.05 rows=400 width=112)
    Output: a.c_custkey, a.c_name, a.c_address, a.c_nationkey, a.c_phone, a.c_acctbal, a.c_mktsegment, a.c_comment, b.c_custkey, b.c_name, b.c_address, b.c_nationkey, b.c_phone, b.c_acctbal, b.c_mktsegment, b.c_comment
    Join Filter: (a.c_custkey <> b.c_custkey)
    ->  Seq Scan on public.customer a  (cost=0.00..431.02 rows=400 width=56)
@@ -669,24 +675,28 @@ EXPLAIN VERBOSE SELECT * FROM customer a JOIN customer b ON a.c_custkey != b.c_c
 EXPLAIN VERBOSE SELECT * FROM customer WHERE customer.c_custkey IN (SELECT customer.c_nationkey + 1 FROM (
     SELECT * FROM nation WHERE nation.n_nationkey IN (SELECT nation.n_nationkey + 1 FROM orders)
 ) i);
-                                                                                   QUERY PLAN                                                                                   
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Nested Loop Semi Join  (cost=0.00..2155.17 rows=160 width=56)
+                                                                                      QUERY PLAN                                                                                      
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.00..2155.21 rows=160 width=56)
    Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-   Join Filter: true
-   ->  Seq Scan on public.customer  (cost=0.00..431.06 rows=160 width=56)
-         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-         Filter: (customer.c_custkey = (customer.c_nationkey + 1))
-   ->  Materialize  (cost=0.00..1293.07 rows=1 width=1)
-         ->  Limit  (cost=0.00..1293.07 rows=1 width=1)
-               ->  Nested Loop Semi Join  (cost=0.00..1293.07 rows=324 width=1)
-                     Join Filter: true
+   Join Filter: ((count(*)) > '0'::bigint)
+   ->  Aggregate  (cost=0.00..1293.09 rows=1 width=8)
+         Output: count(*)
+         ->  Nested Loop  (cost=0.00..1293.09 rows=324 width=1)
+               Join Filter: ((count(*)) > '0'::bigint)
+               ->  Aggregate  (cost=0.00..431.02 rows=1 width=8)
+                     Output: count(*)
+                     ->  Seq Scan on public.orders  (cost=0.00..431.02 rows=450 width=1)
+               ->  Materialize  (cost=0.00..431.05 rows=324 width=1)
                      ->  Seq Scan on public.nation  (cost=0.00..431.05 rows=324 width=1)
                            Filter: (nation.n_nationkey = (nation.n_nationkey + 1))
-                     ->  Limit  (cost=0.00..431.02 rows=1 width=1)
-                           ->  Seq Scan on public.orders  (cost=0.00..431.02 rows=450 width=1)
+   ->  Materialize  (cost=0.00..431.07 rows=160 width=56)
+         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
+         ->  Seq Scan on public.customer  (cost=0.00..431.06 rows=160 width=56)
+               Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
+               Filter: (customer.c_custkey = (customer.c_nationkey + 1))
  Optimizer: pg_orca
-(15 rows)
+(19 rows)
 
 -- CTEs
 EXPLAIN VERBOSE WITH cte AS (SELECT * FROM orders) SELECT * FROM cte;
@@ -741,28 +751,17 @@ EXPLAIN VERBOSE SELECT * FROM customer WHERE EXISTS (SELECT * FROM nation WHERE 
 (11 rows)
 
 EXPLAIN VERBOSE SELECT * FROM customer WHERE c_custkey IN (SELECT DISTINCT c_custkey FROM nation);
-                                                                                              QUERY PLAN                                                                                               
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Result  (cost=0.00..5258.68 rows=400 width=56)
+                                                                                QUERY PLAN                                                                                
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on public.customer  (cost=0.00..693180.26 rows=400 width=56)
    Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-   Filter: ((SubPlan 1) > '0'::bigint)
-   ->  Seq Scan on public.customer  (cost=0.00..5258.65 rows=1000 width=64)
-         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
+   Filter: (ANY (customer.c_custkey = (SubPlan 1).col1))
    SubPlan 1
-     ->  Result  (cost=0.00..452.35 rows=1 width=8)
-           Output: CASE WHEN ((count(*)) = '0'::bigint) THEN '0'::bigint WHEN ((count(*)) = (sum((CASE WHEN ((customer.c_custkey) IS NULL) THEN 1 ELSE 0 END)))) THEN '-1'::bigint ELSE (count(*)) END
-           ->  Aggregate  (cost=0.00..452.35 rows=1 width=16)
-                 Output: count(*), sum((CASE WHEN ((customer.c_custkey) IS NULL) THEN 1 ELSE 0 END))
-                 ->  Result  (cost=0.00..452.35 rows=328 width=4)
-                       Output: CASE WHEN ((customer.c_custkey) IS NULL) THEN 1 ELSE 0 END
-                       ->  Result  (cost=0.00..452.35 rows=328 width=4)
-                             Output: (customer.c_custkey)
-                             Filter: ((customer.c_custkey = (customer.c_custkey)) OR ((customer.c_custkey) IS NULL))
-                             ->  Result  (cost=0.00..431.03 rows=810 width=4)
-                                   Output: customer.c_custkey
-                                   ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=1)
+     ->  Result  (cost=0.00..431.03 rows=810 width=4)
+           Output: customer.c_custkey
+           ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=1)
  Optimizer: pg_orca
-(19 rows)
+(8 rows)
 
 EXPLAIN VERBOSE SELECT * FROM customer WHERE c_custkey IN (SELECT DISTINCT n_regionkey FROM nation);
                                                                                    QUERY PLAN                                                                                   
@@ -782,7 +781,7 @@ EXPLAIN VERBOSE SELECT * FROM customer WHERE c_custkey IN (SELECT DISTINCT n_reg
 EXPLAIN VERBOSE SELECT * FROM customer WHERE c_custkey IN (SELECT c_custkey FROM nation LIMIT 3);
                                                                                 QUERY PLAN                                                                                
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Seq Scan on public.customer  (cost=0.00..1315.29 rows=400 width=56)
+ Seq Scan on public.customer  (cost=0.00..173296.36 rows=400 width=56)
    Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
    Filter: (ANY (customer.c_custkey = (SubPlan 1).col1))
    SubPlan 1
@@ -826,38 +825,43 @@ EXPLAIN VERBOSE SELECT * FROM customer WHERE c_custkey IN (SELECT n_nationkey FR
 (10 rows)
 
 EXPLAIN SELECT * FROM customer WHERE 1+c_custkey IN (SELECT c_nationkey+1 FROM nation);
-                              QUERY PLAN                              
-----------------------------------------------------------------------
- Nested Loop Semi Join  (cost=0.00..1293.12 rows=160 width=56)
-   Join Filter: true
-   ->  Seq Scan on customer  (cost=0.00..431.06 rows=160 width=56)
-         Filter: ((1 + c_custkey) = (c_nationkey + 1))
-   ->  Limit  (cost=0.00..431.02 rows=1 width=1)
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Nested Loop  (cost=0.00..1293.15 rows=160 width=56)
+   Join Filter: ((count(*)) > '0'::bigint)
+   ->  Aggregate  (cost=0.00..431.02 rows=1 width=8)
          ->  Seq Scan on nation  (cost=0.00..431.02 rows=810 width=1)
+   ->  Materialize  (cost=0.00..431.07 rows=160 width=56)
+         ->  Seq Scan on customer  (cost=0.00..431.06 rows=160 width=56)
+               Filter: ((1 + c_custkey) = (c_nationkey + 1))
  Optimizer: pg_orca
-(7 rows)
+(8 rows)
 
 -- start_ignore
 -- Plan shape for non-correlated `2 IN (subq)` flips between Semi Join and the
 -- count/case-rewrite based on minor cost-model perturbations; the result is
 -- semantically identical, but the EXPLAIN text isn't stable. Ignore output.
 EXPLAIN VERBOSE SELECT * FROM customer WHERE 2 IN (SELECT n_nationkey + 1 FROM nation);
-                                                                                   QUERY PLAN                                                                                   
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Nested Loop Semi Join  (cost=0.00..1293.28 rows=400 width=56)
+                                                                                                QUERY PLAN                                                                                                 
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result  (cost=0.00..140706.73 rows=400 width=56)
    Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-   Join Filter: true
-   ->  Seq Scan on public.customer  (cost=0.00..431.02 rows=400 width=56)
-         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment
-   ->  Materialize  (cost=0.00..431.06 rows=324 width=1)
-         ->  Result  (cost=0.00..431.06 rows=324 width=1)
-               Filter: (2 = ((nation.n_nationkey + 1)))
-               ->  Result  (cost=0.00..431.03 rows=810 width=4)
-                     Output: (nation.n_nationkey + 1)
-                     ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=4)
-                           Output: nation.n_nationkey
+   ->  HashAggregate  (cost=0.00..140706.73 rows=400 width=56)
+         Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment, customer.ctid
+         Group Key: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment, customer.ctid
+         ->  Nested Loop  (cost=0.00..140559.44 rows=129600 width=62)
+               Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment, customer.ctid
+               Join Filter: true
+               ->  Result  (cost=0.00..431.06 rows=324 width=1)
+                     Filter: (2 = ((nation.n_nationkey + 1)))
+                     ->  Result  (cost=0.00..431.03 rows=810 width=4)
+                           Output: (nation.n_nationkey + 1)
+                           ->  Seq Scan on public.nation  (cost=0.00..431.02 rows=810 width=4)
+                                 Output: nation.n_nationkey
+               ->  Seq Scan on public.customer  (cost=0.00..431.02 rows=400 width=62)
+                     Output: customer.c_custkey, customer.c_name, customer.c_address, customer.c_nationkey, customer.c_phone, customer.c_acctbal, customer.c_mktsegment, customer.c_comment, customer.ctid
  Optimizer: pg_orca
-(13 rows)
+(17 rows)
 
 -- end_ignore
 -- Correlated EXISTS
@@ -878,7 +882,7 @@ EXPLAIN VERBOSE SELECT * FROM customer WHERE EXISTS(SELECT n_nationkey FROM nati
 EXPLAIN VERBOSE SELECT pn, cn, vn FROM sale s WHERE EXISTS (SELECT * FROM customer WHERE EXISTS (SELECT * FROM product WHERE pn = s.pn));
                                     QUERY PLAN                                    
 ----------------------------------------------------------------------------------
- Seq Scan on public.sale s  (cost=0.00..138386.14 rows=1450 width=12)
+ Seq Scan on public.sale s  (cost=0.00..195651711.17 rows=1450 width=12)
    Output: s.pn, s.cn, s.vn
    Filter: EXISTS(SubPlan 2)
    SubPlan 2
