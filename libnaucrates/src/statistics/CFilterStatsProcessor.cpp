@@ -15,8 +15,12 @@
 #include "gpopt/operators/CExpressionHandle.h"
 #include "gpopt/operators/CPredicateUtils.h"
 #include "gpopt/operators/CScalarCmp.h"
+#include "gpopt/operators/CScalarConst.h"
 #include "gpopt/optimizer/COptimizerConfig.h"
+#include "naucrates/base/CDatumGenericGPDB.h"
+#include "naucrates/md/CMDIdGPDB.h"
 #include "naucrates/statistics/CBucket.h"
+#include "naucrates/statistics/CPoint.h"
 #include "naucrates/statistics/CExtendedStatsProcessor.h"
 #include "naucrates/statistics/CJoinStatsProcessor.h"
 #include "naucrates/statistics/CScaleFactorUtils.h"
@@ -24,6 +28,33 @@
 #include "naucrates/statistics/CStatisticsUtils.h"
 
 using namespace gpopt;
+
+CFilterStatsProcessor::LikeMatchFn CFilterStatsProcessor::s_like_match_fn =
+	nullptr;
+
+void
+CFilterStatsProcessor::SetLikeMatchFn(LikeMatchFn fn)
+{
+	s_like_match_fn = fn;
+}
+
+// Only text/varchar/bpchar datums have a 4-byte varlena header layout that
+// PG's textlike will parse correctly.  Other "string-ish" types like name
+// (NAMEDATALEN bytes, no header) or bytea must not be fed to the hook —
+// textlike would misread the first byte as a varlena header flag and may
+// even trigger detoast/lz4 paths on stray bit patterns.
+static BOOL
+IsTextVarlenaDatum(const IDatum *datum)
+{
+	if (datum == nullptr)
+	{
+		return false;
+	}
+	IMDId *mdid = datum->MDId();
+	return mdid->Equals(&CMDIdGPDB::m_mdid_text) ||
+		   mdid->Equals(&CMDIdGPDB::m_mdid_varchar) ||
+		   mdid->Equals(&CMDIdGPDB::m_mdid_bpchar);
+}
 
 // derive statistics for filter operation based on given scalar expression
 IStatistics *
@@ -38,7 +69,6 @@ CFilterStatsProcessor::MakeStatsFilterForScalarExpr(
 	GPOS_ASSERT(nullptr != local_scalar_expr);
 	GPOS_ASSERT(nullptr != outer_refs_scalar_expr);
 	GPOS_ASSERT(nullptr != all_outer_stats);
-
 	CColRefSet *outer_refs = exprhdl.DeriveOuterReferences();
 
 	// TODO  June 13 2014, we currently only cap ndvs when we have a filter
@@ -777,14 +807,83 @@ CFilterStatsProcessor::MakeHistLikeFilter(CStatsPredLike *pred_stats,
 	GPOS_ASSERT(nullptr != hist_before);
 
 	const ULONG colid = pred_stats->GetColId();
-
-	// note column id
 	(void) filter_colids->ExchangeSet(colid);
 	CHistogram *result_histogram = hist_before->CopyHistogram();
-
-	*last_scale_factor = *last_scale_factor * pred_stats->DefaultScaleFactor();
 	*target_last_colid = colid;
 
+	// Try histogram-based selectivity (mirrors PG's histogram_selectivity):
+	// apply the LIKE pattern to each bucket lower bound, count matches.
+	// Requires >= 10 buckets and a string-type pattern datum.
+	static const ULONG min_hist_buckets = 10;
+	static const ULONG n_skip = 1;	// skip first and last bucket boundary
+
+	const CBucketArray *buckets = hist_before->GetBuckets();
+	ULONG nbuckets = buckets->Size();
+
+	CExpression *expr_right = pred_stats->GetExprOnRight();
+	CScalarConst *scalar_const =
+		(expr_right != nullptr && COperator::EopScalarConst == expr_right->Pop()->Eopid())
+			? CScalarConst::PopConvert(expr_right->Pop())
+			: nullptr;
+	IDatum *pat_datum = (scalar_const != nullptr) ? scalar_const->GetDatum() : nullptr;
+
+	// Need the PG-backed matcher installed (encoding-aware), and both the
+	// pattern and the column type must have a varlena layout (text /
+	// varchar / bpchar).  Other types — notably 'name' on system catalogs —
+	// would feed raw NameData bytes to PG textlike, which then misreads the
+	// first byte as a varlena header flag (e.g. 0x66 'f', 0x76 'v', 0x6e 'n'
+	// all set the compressed bit) and triggers spurious "lz4 not supported"
+	// errors on system-catalog LIKE predicates like
+	// "relname LIKE 'guid%'".  Fall back to the legacy heuristic otherwise.
+	if (s_like_match_fn != nullptr && IsTextVarlenaDatum(pat_datum) &&
+		nbuckets >= min_hist_buckets)
+	{
+		const BYTE *pat_bytes = pat_datum->GetByteArrayValue();
+		ULONG pat_size = pat_datum->Size();
+
+		// Size sanity-check: a varlena needs at least 1 byte for the header.
+		// PG's textlike handles 1B short and 4B long headers itself, so we
+		// only need to reject pathologically empty buffers.
+		if (pat_size == 0)
+		{
+			*last_scale_factor = *last_scale_factor * pred_stats->DefaultScaleFactor();
+			return result_histogram;
+		}
+
+		ULONG nmatch = 0;
+		ULONG nchecked = 0;
+		ULONG end = (nbuckets > n_skip) ? (nbuckets - n_skip) : nbuckets;
+
+		for (ULONG i = n_skip; i < end; i++)
+		{
+			IDatum *bnd = (*buckets)[i]->GetLowerBound()->GetDatum();
+			if (bnd->IsNull() || !IsTextVarlenaDatum(bnd))
+				continue;
+
+			const BYTE *str_bytes = bnd->GetByteArrayValue();
+			ULONG str_size = bnd->Size();
+			if (str_size == 0)
+				continue;
+
+			if (s_like_match_fn(str_bytes, str_size, pat_bytes, pat_size))
+				nmatch++;
+			nchecked++;
+		}
+
+		if (nchecked > 0)
+		{
+			CDouble hist_sel((double) nmatch / (double) nchecked);
+			// clamp to [0.0001, 0.9999] matching PG
+			hist_sel = std::max(hist_sel, CDouble(0.0001));
+			hist_sel = std::min(hist_sel, CDouble(0.9999));
+			CDouble scale_factor = CDouble(1.0) / hist_sel;
+			*last_scale_factor = *last_scale_factor * scale_factor;
+			return result_histogram;
+		}
+	}
+
+	// fallback: use the character-counting heuristic
+	*last_scale_factor = *last_scale_factor * pred_stats->DefaultScaleFactor();
 	return result_histogram;
 }
 

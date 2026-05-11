@@ -679,6 +679,12 @@ uint32 HashText(Datum d);
 
 uint32 HashName(Datum d);
 
+// SQL LIKE match using PG's textlike (encoding-aware, multibyte-safe).
+// str_bytes/pat_bytes are raw varlena bytes including the 4-byte header,
+// matching the layout in CDatumGenericGPDB::m_bytearray_value.
+bool TextLikeMatch(const unsigned char *str_bytes, uint32 str_size,
+				   const unsigned char *pat_bytes, uint32 pat_size);
+
 uint32 UUIDHash(Datum d);
 
 void *GPDBMemoryContextAlloc(MemoryContext context, Size size);

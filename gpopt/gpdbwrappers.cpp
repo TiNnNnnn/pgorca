@@ -2973,6 +2973,30 @@ gpdb::HashText(Datum d)
 	GP_WRAP_END;
 }
 
+bool
+gpdb::TextLikeMatch(const unsigned char *str_bytes, uint32 str_size,
+					const unsigned char *pat_bytes, uint32 pat_size)
+{
+	// str_size/pat_size are ignored: textlike reads the length from the
+	// varlena header on each buffer.  They're carried in the signature so
+	// the caller stays decoupled from PG's varlena layout.
+	(void) str_size;
+	(void) pat_size;
+
+	GP_WRAP_START;
+	{
+		// PG's textlike picks the SB / UTF8 / multibyte matcher based on the
+		// server encoding and walks characters, not bytes — which is exactly
+		// what makes this safe for non-ASCII data.
+		Datum result = DirectFunctionCall2Coll(
+			textlike, DEFAULT_COLLATION_OID,
+			PointerGetDatum(str_bytes), PointerGetDatum(pat_bytes));
+		return DatumGetBool(result);
+	}
+	GP_WRAP_END;
+	return false;
+}
+
 uint32
 gpdb::HashName(Datum d)
 {

@@ -104,6 +104,19 @@ public:
 	static CDouble SelectivityOfPredicate(CMemoryPool *mp, CExpression *pred,
 										  CTableDescriptor *ptabdesc,
 										  CColRefSet *pcrsOuterRefs);
+
+	// Encoding-aware LIKE matcher hook.  PG integration layer installs an
+	// implementation that delegates to PG's textlike (multibyte-safe); when
+	// unset (e.g. standalone gporca_test), histogram-based LIKE estimation
+	// falls back to the legacy character-count heuristic.  Both buffers carry
+	// the 4-byte varlena header — same layout as
+	// CDatumGenericGPDB::m_bytearray_value.
+	using LikeMatchFn = BOOL (*)(const BYTE *str_bytes, ULONG str_size,
+								 const BYTE *pat_bytes, ULONG pat_size);
+	static void SetLikeMatchFn(LikeMatchFn fn);
+
+private:
+	static LikeMatchFn s_like_match_fn;
 };
 }  // namespace gpnaucrates
 

@@ -988,7 +988,6 @@ CStatsPredUtils::GetStatsPredLike(CMemoryPool *mp, CExpression *predicate_expr,
 {
 	GPOS_ASSERT(nullptr != predicate_expr);
 	GPOS_ASSERT(CPredicateUtils::FLikePredicate(predicate_expr));
-
 	CExpression *expr_left = (*predicate_expr)[0];
 	CExpression *expr_right = (*predicate_expr)[1];
 
@@ -1023,7 +1022,11 @@ CStatsPredUtils::GetStatsPredLike(CMemoryPool *mp, CExpression *predicate_expr,
 	IDatum *datum_literal = scalar_const_op->GetDatum();
 
 	const CColRef *col_ref = scalar_ident_op->Pcr();
-	if (!IMDType::StatsAreComparable(col_ref->RetrieveType(), datum_literal))
+	// For LIKE, string types (varchar/text/bpchar) are not LINT/double comparable
+	// but are still estimable via histogram matching.  Allow them through if the
+	// pattern datum supports LIKE predicate estimation.
+	if (!IMDType::StatsAreComparable(col_ref->RetrieveType(), datum_literal) &&
+		!datum_literal->SupportsLikePredicate())
 	{
 		// unsupported stats comparison between the column and datum
 		return GPOS_NEW(mp)

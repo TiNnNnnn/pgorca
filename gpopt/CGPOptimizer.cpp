@@ -27,6 +27,7 @@
 #include "gpopt/init.h"
 #include "naucrates/exception.h"
 #include "naucrates/init.h"
+#include "naucrates/statistics/CFilterStatsProcessor.h"
 
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -166,6 +167,11 @@ CGPOptimizer::InitGPOPT()
 	gpos_init(&params);
 	gpdxl_init();
 	gpopt_init();
+
+	// Wire the encoding-aware LIKE matcher (PG's textlike) into the ORCA
+	// statistics layer so histogram_selectivity-style estimation walks
+	// characters instead of raw bytes.
+	gpnaucrates::CFilterStatsProcessor::SetLikeMatchFn(&gpdb::TextLikeMatch);
 }
 
 //---------------------------------------------------------------------------

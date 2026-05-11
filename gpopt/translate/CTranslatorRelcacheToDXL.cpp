@@ -1988,7 +1988,8 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 	(void) gpdb::GetAttrStatsSlot(&mcv_slot, stats_tup, STATISTIC_KIND_MCV,
 								  InvalidOid,
 								  ATTSTATSSLOT_VALUES | ATTSTATSSLOT_NUMBERS);
-	if (InvalidOid != mcv_slot.valuetype && mcv_slot.valuetype != att_type)
+	if (InvalidOid != mcv_slot.valuetype && mcv_slot.valuetype != att_type &&
+		!IsBinaryCoercible(mcv_slot.valuetype, att_type))
 	{
 		char msgbuf[NAMEDATALEN * 2 + 100];
 		snprintf(
@@ -2039,7 +2040,8 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 								  STATISTIC_KIND_HISTOGRAM, InvalidOid,
 								  ATTSTATSSLOT_VALUES);
 
-	if (InvalidOid != hist_slot.valuetype && hist_slot.valuetype != att_type)
+	if (InvalidOid != hist_slot.valuetype && hist_slot.valuetype != att_type &&
+		!IsBinaryCoercible(hist_slot.valuetype, att_type))
 	{
 		char msgbuf[NAMEDATALEN * 2 + 100];
 		snprintf(
@@ -2054,15 +2056,23 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 		is_dummy_stats = true;
 	}
 
+	// Release the HeapTuple now — slots hold independent palloc'd copies of
+	// the Datum arrays (see DatumGetArrayTypePCopy in GetAttrStatsSlot), so
+	// stats_tup is no longer needed.  Freeing early avoids a SysCache pin
+	// leak if TransformStatsToDXLBucketArray throws a GPOS exception.
+	gpdb::FreeHeapTuple(stats_tup);
+	stats_tup = nullptr;
+
 	if (is_dummy_stats)
 	{
+		gpdb::FreeAttrStatsSlot(&mcv_slot);
+		gpdb::FreeAttrStatsSlot(&hist_slot);
 		dxl_stats_bucket_array->Release();
 		mdid_col_stats->AddRef();
 
-		CDouble col_width = CStatistics::DefaultColumnWidth;
-		gpdb::FreeHeapTuple(stats_tup);
 		return CDXLColStats::CreateDXLDummyColStats(mp, mdid_col_stats,
-													md_colname, col_width);
+													md_colname,
+													CStatistics::DefaultColumnWidth);
 	}
 
 	CDouble num_ndv_buckets(0.0);
@@ -2103,11 +2113,9 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 			std::max(CDouble(0.0), (1 - num_freq_buckets - null_freq));
 	}
 
-	// free up allocated datum and float4 arrays
+	// free up allocated datum and float4 arrays (stats_tup already freed above)
 	gpdb::FreeAttrStatsSlot(&mcv_slot);
 	gpdb::FreeAttrStatsSlot(&hist_slot);
-
-	gpdb::FreeHeapTuple(stats_tup);
 
 	// create col stats object
 	mdid_col_stats->AddRef();
@@ -2366,11 +2374,7 @@ CTranslatorRelcacheToDXL::TransformStatsToDXLBucketArray(
 		hist_freq = CDouble(1.0) - null_freq - mcv_freq;
 	}
 
-	BOOL is_text_type = mdid_atttype->Equals(&CMDIdGPDB::m_mdid_varchar) ||
-						mdid_atttype->Equals(&CMDIdGPDB::m_mdid_bpchar) ||
-						mdid_atttype->Equals(&CMDIdGPDB::m_mdid_text);
-	BOOL has_hist = !is_text_type && 1 < num_hist_values &&
-					CStatistics::Epsilon < hist_freq;
+	BOOL has_hist = 1 < num_hist_values && CStatistics::Epsilon < hist_freq;
 
 	CHistogram *histogram = nullptr;
 
@@ -2535,12 +2539,14 @@ CTranslatorRelcacheToDXL::TransformHistToOrcaHistogram(
 					is_upper_closed, freq_per_bucket, distinct_per_bucket);
 		buckets->Append(bucket);
 
-		if (!min_datum->StatsAreComparable(max_datum) ||
-			!min_datum->StatsAreLessThan(max_datum))
+		if (!min_datum->SupportsLikePredicate() &&
+			(!min_datum->StatsAreComparable(max_datum) ||
+			 !min_datum->StatsAreLessThan(max_datum)))
 		{
 			// if less than operation is not supported on this datum,
 			// or the translated histogram does not conform to GPDB sort order (e.g. text column in Linux platform),
 			// then no point building a histogram. return an empty histogram
+			// Exception: string datums (SupportsLikePredicate) are kept for LIKE selectivity estimation.
 
 			// TODO: 03/01/2014 translate histogram into Orca even if sort
 			// order is different in GPDB, and use const expression eval to compare
