@@ -44,6 +44,33 @@
 using namespace gpos;
 using namespace gpdbcost;
 
+namespace
+{
+// Warm-cache OLS-derived constants for index probes inside an NL join.
+//
+// Values derived from OLS regression on SF=2 TPC-H, PG 18, warm cache:
+//   Model:  T_per_probe = α + r × W_real × β
+//   Exp3:   lineitem_pkey heap-fetch, r=1..7, K=10000 fixed (R²≈0.999)
+//   α       = 4.914e-3 ms/probe
+//   C_unit  = 1.154 ms/unit
+//   ulKeys  = 2 (index key cols)
+//   dIF     = 1.65e-4 (dIndexFilterCostUnit)
+//   W_real  = 98 bytes (lineitem narrow projection)
+//   W_orca  = 135 (lineitem ORCA-modeled width)
+//   β       = 6.628e-6 ms/(probe·row·byte)
+//
+//   k_WarmIndexRandomFactor    = α / C_unit                       = 4.259e-3
+//   k_WarmIndexScanTupCostUnit = (W_real×β/C_unit - ulKeys×dIF) / W_orca
+//                              = (98×6.628e-6/1.154 - 2×1.65e-4) / 135
+//                              = 1.725e-6
+//
+// Used by CostIndexScan and CostIndexOnlyScan when the scan is the inner
+// side of an NL join (exprhdl.HasOuterRefs()). Avoids the cold-disk MPP
+// random-I/O term that otherwise inflates per-probe cost by ~100×.
+constexpr DOUBLE k_WarmIndexRandomFactor = 4.259e-3;
+constexpr DOUBLE k_WarmIndexScanTupCostUnit = 1.725e-6;
+}  // namespace
+
 
 //---------------------------------------------------------------------------
 //	@function:
@@ -1944,23 +1971,14 @@ CCostModelGPDB::CostIndexScan(CMemoryPool *mp GPOS_UNUSED,
 		}
 		else if (exprhdl.HasOuterRefs())
 		{
-			// Leading-column predicate inside an NL join (inner has outer refs):
-			// On single-node PG with a warm buffer cache the B-tree root and
-			// upper pages are always pinned, and the heap pages for a selective
-			// lookup are often already in cache.  Both the random-I/O term and
-			// the per-row heap-fetch term are much cheaper than the cold-disk
-			// MPP model assumes.
-			//
-			// Values derived from OLS regression on SF=2 TPC-H, PG 18, warm cache:
-			//   Model: T_per_probe = α + r×W_real×β
-			//   Exp3: lineitem_pkey heap-fetch, r=1..7, K=10000 fixed (R²≈0.999)
-			//   α = 4.914e-3 ms/probe → dEffRandom = α/C_unit = 4.259e-3
-			//   β = 6.628e-6 ms/(probe·row·byte), W_real=98, C_unit=1.154 ms/unit
-			//   dEffScanTupCostUnit = (W_real×β/C_unit - ulKeys×dIF) / W_orca
-			//                      = (98×6.628e-6/1.154 - 2×1.65e-4) / 135
-			//                      = 1.725e-6
-			dEffectiveRandomFactor = CDouble(4.259e-3);
-			dEffectiveScanTupCostUnit = CDouble(1.725e-6);
+			// Leading-column predicate inside an NL join: with a warm buffer
+			// cache the B-tree root and upper pages are pinned and heap pages
+			// for selective lookups are typically resident, so per-probe cost
+			// is much cheaper than the cold-disk MPP model assumes. See
+			// k_WarmIndexRandomFactor / k_WarmIndexScanTupCostUnit at the top
+			// of this file for the OLS derivation.
+			dEffectiveRandomFactor = CDouble(k_WarmIndexRandomFactor);
+			dEffectiveScanTupCostUnit = CDouble(k_WarmIndexScanTupCostUnit);
 		}
 	}
 
@@ -2179,16 +2197,29 @@ CCostModelGPDB::CostIndexOnlyScan(CMemoryPool *mp GPOS_UNUSED,	  // mp
 		dCostVisibilityMapLookup = 0.000001;
 	}
 
+	// When IndexOnlyScan is the inner side of an NL join, use the same
+	// warm-cache constants as CostIndexScan. IndexOnlyScan is physically
+	// cheaper (skips the heap fetch when the page is all-visible), but
+	// without these constants it would inherit the cold-disk MPP random-I/O
+	// term and end up costed ~100× higher per probe than CostIndexScan.
+	CDouble dEffectiveRandomFactor = dIndexScanTupRandomFactor;
+	CDouble dEffectiveScanTupCostUnit = dIndexScanTupCostUnit;
+	if (exprhdl.HasOuterRefs())
+	{
+		dEffectiveRandomFactor = CDouble(k_WarmIndexRandomFactor);
+		dEffectiveScanTupCostUnit = CDouble(k_WarmIndexScanTupCostUnit);
+	}
+
 	CDouble dCostPerIndexRow =
 		ulIndexKeys * dIndexFilterCostUnit +
 		// partial visibile read from table
-		dTableWidth * dIndexScanTupCostUnit * dPartialVisFrac +
+		dTableWidth * dEffectiveScanTupCostUnit * dPartialVisFrac +
 		// always read from index (partial and full visible)
 		ulIncludedColWidth * dIndexOnlyScanTupCostUnit;
 
 	return CCost(pci->NumRebinds() *
 					 (dRowsIndex * dCostPerIndexRow +
-					  dIndexScanTupRandomFactor + dUnusedIndexCost) +
+					  dEffectiveRandomFactor + dUnusedIndexCost) +
 				 dCostVisibilityMapLookup);
 }
 
