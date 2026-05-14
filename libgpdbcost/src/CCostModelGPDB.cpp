@@ -1300,11 +1300,12 @@ CCostModelGPDB::CostIndexNLJoin(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	CCost costChild =
 		CostChildren(mp, exprhdl, pci, pcmgpdb->GetCostModelParams());
 
-	// For InnerIndexNLJ only: when the inner child was priced with
-	// innerRebinds=1 (decorrelated, no outer refs in its group), add the cost
-	// of the remaining (outer_rows - 1) re-executions.  LeftOuter/Semi/Anti
-	// variants have correct rebind accounting already and must not be touched.
-	if (COperator::EopPhysicalInnerIndexNLJoin == exprhdl.Pop()->Eopid())
+	// IndexNL re-executes the inner index probe once per outer row.
+	// Inner child stats no longer bake the outer cardinality into rebinds
+	// (see CJoinStatsProcessor::DeriveStatsWithOuterRefs), so the cached
+	// inner cost reflects rebinds=1.  Add (outer_rows - 1) re-executions
+	// using the current NL's outer cardinality.  Applies to all IndexNL
+	// variants: Inner / LeftOuter / LeftSemi / LeftAntiSemi.
 	{
 		DOUBLE dInnerRebinds = pci->PdRebinds()[1];
 		if (dInnerRebinds < num_rows_outer)
@@ -1941,9 +1942,9 @@ CCostModelGPDB::CostIndexScan(CMemoryPool *mp GPOS_UNUSED,
 					(CDouble(rel_pages) / dRowsIndex);
 			}
 		}
-		else if (pci->NumRebinds() > 1)
+		else if (exprhdl.HasOuterRefs())
 		{
-			// Leading-column predicate inside an NL join (NumRebinds > 1):
+			// Leading-column predicate inside an NL join (inner has outer refs):
 			// On single-node PG with a warm buffer cache the B-tree root and
 			// upper pages are always pinned, and the heap pages for a selective
 			// lookup are often already in cache.  Both the random-I/O term and
@@ -1982,7 +1983,12 @@ CCostModelGPDB::CostIndexScan(CMemoryPool *mp GPOS_UNUSED,
 	// This saturates at rel_pages as selectivity → 1.
 	// Cost per page = seq-scan page cost * (seq_bw / rnd_bw).
 	CDouble dHeapFetchCost(0.0);
-	if (pci->NumRebinds() <= 1 && nullptr != stats)
+	// Only price heap-page random I/O for standalone index scans.  When this
+	// scan is the inner side of an NL join (HasOuterRefs), each per-probe
+	// access is amortized across warm buffer cache hits — already modeled by
+	// the warm-cache OLS path above — so adding cold-disk heap fetch cost on
+	// top would double-count and inflate inner cost by 100× or more.
+	if (!exprhdl.HasOuterRefs() && nullptr != stats)
 	{
 		ULONG rel_pages = CStatistics::CastStats(stats)->RelPages();
 		CDouble dRelRows = CStatistics::CastStats(stats)->Rows();

@@ -678,10 +678,14 @@ CJoinStatsProcessor::DeriveStatsWithOuterRefs(
 		mp, statistics_array, expr, exprhdl.Pop());
 	statistics_array->Release();
 
-	// scale result using cardinality of outer stats and set number of rebinds of returned stats
+	// Scale result by 1/num_rows_outer so Rows() represents per-probe output.
+	// Intentionally do NOT call SetRebinds(num_rows_outer): leave rebinds at
+	// the default (1). Multiplying by the actual outer cardinality is done at
+	// cost time in CostNLJoin/CostIndexNLJoin, which uses the current NL
+	// outer rows. This avoids baking a stale outer-cardinality into the
+	// (group-shared) inner stats, so post-join-reorder cost remains accurate.
 	IStatistics *result_stats =
 		result_join_stats->ScaleStats(mp, CDouble(1.0 / num_rows_outer));
-	result_stats->SetRebinds(num_rows_outer);
 	result_join_stats->Release();
 
 	return result_stats;
