@@ -12,6 +12,9 @@ extern "C" {
 #include "utils/guc.h"
 }
 
+// optimizer_join_order GUC defined in pg_orca.cpp
+extern int optimizer_join_order;
+
 #include "gpopt/config/CConfigParamMapping.h"
 #include "gpopt/xforms/CXform.h"
 #include "naucrates/traceflags/traceflags.h"
@@ -477,8 +480,30 @@ CConfigParamMapping::PackConfigParamInBitset(CMemoryPool *mp, ULONG xform_id)
 		traceflag_bitset->ExchangeSet(EopttraceDisableInnerMergeJoin);
 	}
 
-	// Default join order: exhaustive search (best quality for single-node)
-	CBitSet *join_heuristic_bitset = CXform::PbsJoinOrderOnExhaustiveXforms(mp);
+	// Join order search algorithm, controlled by GUC optimizer_join_order
+	// (definition lives in pg_orca.cpp).  Defaults to "exhaustive2" (DPv2),
+	// matching cbdb; users can opt into other strategies per session, e.g.
+	//   SET optimizer_join_order = exhaustive;
+	CBitSet *join_heuristic_bitset = nullptr;
+	switch (optimizer_join_order)
+	{
+		case 0:	 // JOIN_ORDER_IN_QUERY
+			join_heuristic_bitset = CXform::PbsJoinOrderInQueryXforms(mp);
+			break;
+		case 1:	 // JOIN_ORDER_GREEDY_SEARCH
+			join_heuristic_bitset = CXform::PbsJoinOrderOnGreedyXforms(mp);
+			break;
+		case 2:	 // JOIN_ORDER_EXHAUSTIVE_SEARCH
+			join_heuristic_bitset = CXform::PbsJoinOrderOnExhaustiveXforms(mp);
+			break;
+		case 3:	 // JOIN_ORDER_EXHAUSTIVE2_SEARCH (default)
+			join_heuristic_bitset =
+				CXform::PbsJoinOrderOnExhaustive2Xforms(mp);
+			break;
+		default:
+			elog(ERROR, "invalid optimizer_join_order value %d",
+				 optimizer_join_order);
+	}
 	traceflag_bitset->Union(join_heuristic_bitset);
 	join_heuristic_bitset->Release();
 

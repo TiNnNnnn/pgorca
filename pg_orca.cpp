@@ -90,6 +90,21 @@ bool  optimizer_print_optimization_context      = false;
 bool  optimizer_cte_inlining                    = false;
 int   optimizer_cte_inlining_bound              = 0;
 
+
+#define JOIN_ORDER_IN_QUERY            0
+#define JOIN_ORDER_GREEDY_SEARCH       1
+#define JOIN_ORDER_EXHAUSTIVE_SEARCH   2
+#define JOIN_ORDER_EXHAUSTIVE2_SEARCH  3
+int   optimizer_join_order = JOIN_ORDER_EXHAUSTIVE2_SEARCH;
+
+static const struct config_enum_entry optimizer_join_order_options[] = {
+    {"query",       JOIN_ORDER_IN_QUERY,           false},
+    {"greedy",      JOIN_ORDER_GREEDY_SEARCH,      false},
+    {"exhaustive",  JOIN_ORDER_EXHAUSTIVE_SEARCH,  false},
+    {"exhaustive2", JOIN_ORDER_EXHAUSTIVE2_SEARCH, false},
+    {NULL, 0, false}
+};
+
 /* xforms array: indexed by xform id, true means disabled */
 bool  optimizer_xforms[512] = {false};
 
@@ -603,6 +618,14 @@ void _PG_init(void)
         "optimizer_index_join_allowed_risk_threshold",
         "Stats estimation risk threshold above which ORCA penalizes index NLJ cost (default 3).",
         NULL, &optimizer_index_join_allowed_risk_threshold, 3.0, 0.0, 1e10,
+        PGC_USERSET, 0, NULL, NULL, NULL);
+
+    DefineCustomEnumVariable(
+        "optimizer_join_order",
+        "Join order search algorithm used by ORCA "
+        "(query | greedy | exhaustive | exhaustive2).",
+        NULL, &optimizer_join_order, JOIN_ORDER_EXHAUSTIVE2_SEARCH,
+        optimizer_join_order_options,
         PGC_USERSET, 0, NULL, NULL, NULL);
 
     DefineCustomStringVariable(
