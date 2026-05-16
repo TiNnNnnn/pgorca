@@ -193,6 +193,15 @@ private:
 	// Set the bitmapset of a plan to the list of param_ids defined by the plan
 	static void SetParamIds(Plan *);
 
+	// Re-derive extParam/allParam for every Plan node in post-order.  Needed
+	// because the per-node SetParamIds calls during translation run before
+	// lefttree/righttree are attached, so they capture Params from the node's
+	// own expressions but not from its child subtrees.  After the full plan
+	// is assembled, this pass walks the tree post-order and bubbles each
+	// child's extParam up so chgParam can propagate during executor rescans
+	// (critical for correctness inside correlated SubPlans).
+	static void FinalizeParamIds(Plan *plan);
+
 	static List *TranslatePartOids(IMdIdArray *parts, INT lockmode);
 
 	static List *TranslateJoinPruneParamids(

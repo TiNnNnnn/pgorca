@@ -404,6 +404,12 @@ CTranslatorDXLToPlStmt::GetPlannedStmtFromDXL(const CDXLNode *dxlnode,
 		topslice->gangType = GANGTYPE_PRIMARY_WRITER;
 	}
 
+	/* Bubble extParam/allParam up through every Plan node now that the full
+	 * tree (incl. all SubPlan bodies) is assembled. */
+	FinalizeParamIds(planned_stmt->planTree);
+	foreach (lc_rte, planned_stmt->subplans)
+		FinalizeParamIds((Plan *) lfirst(lc_rte));
+
 	return planned_stmt;
 }
 
@@ -656,6 +662,87 @@ CTranslatorDXLToPlStmt::SetParamIds(Plan *plan)
 
 	plan->extParam = bitmapset;
 	plan->allParam = bitmapset;
+}
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CTranslatorDXLToPlStmt::FinalizeParamIds
+//
+//	@doc:
+//		Post-order walker that re-derives plan->extParam / allParam for every
+//		Plan node after the tree is fully assembled.  Each per-node SetParamIds
+//		call during translation runs before lefttree/righttree have been
+//		attached, so it only captures Params directly referenced in the node's
+//		own expressions and misses Params buried in child subtrees.
+//
+//		The executor needs extParam to be set correctly so that
+//		UpdateChangedParamSet (which intersects newchg with child->allParam)
+//		can propagate chgParam down to descendants on rescan.  A correlated
+//		SubPlan with a HashAgg inside is the canonical failure mode: without
+//		this finalization, the HashAgg's outer plan's chgParam stays NULL,
+//		ExecReScanAgg returns the cached hash table from the first probe,
+//		and the correlated filter (e.g. C.i = A.i) silently freezes on the
+//		first outer row's value.
+//---------------------------------------------------------------------------
+void
+CTranslatorDXLToPlStmt::FinalizeParamIds(Plan *plan)
+{
+	if (plan == nullptr)
+		return;
+
+	/* Recurse into all Plan-bearing children first (post-order).  SubPlan
+	 * bodies (referenced from initPlan / subPlan / qual expressions) live
+	 * in PlannedStmt.subplans[] and are finalized separately by the caller
+	 * walking that list. */
+	FinalizeParamIds(plan->lefttree);
+	FinalizeParamIds(plan->righttree);
+
+	ListCell *lc;
+	/* Plan-node-specific Plan-tree children (mirrors plan_tree_walker
+	 * cases in compat/utils/walkers.c). */
+	switch (nodeTag(plan))
+	{
+		case T_Append:
+		{
+			foreach (lc, ((Append *) plan)->appendplans)
+				FinalizeParamIds((Plan *) lfirst(lc));
+			break;
+		}
+		case T_MergeAppend:
+		{
+			foreach (lc, ((MergeAppend *) plan)->mergeplans)
+				FinalizeParamIds((Plan *) lfirst(lc));
+			break;
+		}
+		case T_BitmapAnd:
+		{
+			foreach (lc, ((BitmapAnd *) plan)->bitmapplans)
+				FinalizeParamIds((Plan *) lfirst(lc));
+			break;
+		}
+		case T_BitmapOr:
+		{
+			foreach (lc, ((BitmapOr *) plan)->bitmapplans)
+				FinalizeParamIds((Plan *) lfirst(lc));
+			break;
+		}
+		case T_SubqueryScan:
+			FinalizeParamIds(((SubqueryScan *) plan)->subplan);
+			break;
+		case T_CustomScan:
+		{
+			foreach (lc, ((CustomScan *) plan)->custom_plans)
+				FinalizeParamIds((Plan *) lfirst(lc));
+			break;
+		}
+		default:
+			break;
+	}
+
+	/* Now that all descendants have been finalized, recompute this node's
+	 * extParam/allParam by walking the whole subtree.  extract_nodes_plan
+	 * follows lefttree/righttree and all plan-node-specific Plan children. */
+	SetParamIds(plan);
 }
 
 List *
