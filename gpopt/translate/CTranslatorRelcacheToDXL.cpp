@@ -1884,6 +1884,130 @@ CTranslatorRelcacheToDXL::RetrieveRelStats(CMemoryPool *mp, IMDId *mdid)
 	return dxl_rel_stats;
 }
 
+namespace
+{
+// Decode pg_statistic.stadistinct (absolute if >0, fractional if <0) into an
+// absolute NDV given total row count and null fraction.  Returns 0.0 when
+// stadistinct == 0 (no estimate).
+static CDouble
+DecodeStaDistinct(double stadistinct, double num_rows, double null_freq)
+{
+	if (stadistinct < 0)
+	{
+		return CDouble(num_rows) * (CDouble(1.0) - CDouble(null_freq)) *
+			   CDouble(-stadistinct);
+	}
+	if (stadistinct > 0)
+	{
+		return CDouble(stadistinct);
+	}
+	return CDouble(0.0);
+}
+
+// Compute a lower bound on NDV(attno) from composite UNIQUE constraints on
+// the relation.  If (attno, c2, c3, ...) is unique with row count R, then
+// under independence NDV(attno) >= R / (NDV(c2) * NDV(c3) * ...).  This
+// corrects sample-based undercounts for high-cardinality FK columns whose
+// pg_statistic.stadistinct is stored as a small absolute value (e.g.
+// lineitem.l_orderkey).  Returns 0.0 if no usable unique constraint is found
+// or if any other key column lacks stats.
+static CDouble
+NdvBoundFromUniqueKeys(OID rel_oid, AttrNumber attno, double num_rows)
+{
+	CDouble bound(0.0);
+	if (num_rows <= 0)
+	{
+		return bound;
+	}
+
+	gpdb::RelationWrapper rel = gpdb::GetRelation(rel_oid);
+	if (!rel)
+	{
+		return bound;
+	}
+
+	List *index_oids = gpdb::GetRelationIndexes(rel.get());
+	ListCell *lc = nullptr;
+	ForEach(lc, index_oids)
+	{
+		OID index_oid = lfirst_oid(lc);
+		gpdb::RelationWrapper index_rel = gpdb::GetRelation(index_oid);
+		if (!index_rel)
+		{
+			continue;
+		}
+		Form_pg_index form_pg_index = index_rel->rd_index;
+		if (nullptr == form_pg_index || !form_pg_index->indisunique)
+		{
+			continue;
+		}
+
+		BOOL contains_attno = false;
+		for (int i = 0; i < form_pg_index->indnkeyatts; i++)
+		{
+			if (form_pg_index->indkey.values[i] == attno)
+			{
+				contains_attno = true;
+				break;
+			}
+		}
+		if (!contains_attno)
+		{
+			continue;
+		}
+
+		CDouble product(1.0);
+		BOOL all_known = true;
+		for (int i = 0; i < form_pg_index->indnkeyatts; i++)
+		{
+			AttrNumber other_attno = form_pg_index->indkey.values[i];
+			if (other_attno == attno)
+			{
+				continue;
+			}
+			// expression index entries appear as attno 0 -- bail out
+			if (other_attno == 0)
+			{
+				all_known = false;
+				break;
+			}
+			HeapTuple ostats = gpdb::GetAttStats(rel_oid, other_attno);
+			if (!HeapTupleIsValid(ostats))
+			{
+				all_known = false;
+				break;
+			}
+			Form_pg_statistic of =
+				(Form_pg_statistic) GETSTRUCT(ostats);
+			double onull = (of->stanullfrac > 0) ? of->stanullfrac : 0.0;
+			CDouble other_ndv =
+				DecodeStaDistinct(of->stadistinct, num_rows, onull);
+			gpdb::FreeHeapTuple(ostats);
+			if (other_ndv <= CDouble(0.0))
+			{
+				all_known = false;
+				break;
+			}
+			if (other_ndv < CDouble(1.0))
+			{
+				other_ndv = CDouble(1.0);
+			}
+			product = product * other_ndv;
+		}
+
+		if (all_known && product > CDouble(0.0))
+		{
+			CDouble local_bound = CDouble(num_rows) / product;
+			if (local_bound > bound)
+			{
+				bound = local_bound;
+			}
+		}
+	}
+	return bound;
+}
+}  // namespace
+
 // Retrieve column statistics from relcache
 // If all statistics are missing, create dummy statistics
 // Also, if the statistics are broken, create dummy statistics
@@ -1979,6 +2103,21 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 		num_distinct = CDouble(form_pg_stats->stadistinct);
 	}
 	num_distinct = num_distinct.Ceil();
+
+	// Apply unique-key NDV lower bound.  ANALYZE's sample-based NDV estimate
+	// can severely undercount distinct values for high-cardinality FK columns
+	// (e.g. lineitem.l_orderkey under default statistics_target stores
+	// stadistinct ~466K vs the true ~6.88M).  When a composite UNIQUE
+	// constraint includes this column, the relation's row count divided by
+	// the product of the other key columns' NDVs is a mathematical lower
+	// bound on this column's NDV.  Take the max with the sample-based value.
+	{
+		CDouble ndv_bound = NdvBoundFromUniqueKeys(rel_oid, attno, num_rows);
+		if (ndv_bound > num_distinct)
+		{
+			num_distinct = ndv_bound.Ceil();
+		}
+	}
 
 	BOOL is_dummy_stats = false;
 	// most common values and their frequencies extracted from the pg_statistic
