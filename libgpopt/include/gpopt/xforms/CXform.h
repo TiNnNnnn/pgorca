@@ -240,6 +240,8 @@ public:
 		ExfSplitWindowFunc,
 		ExfDynamicGet2AppendTableScan,
 		ExfSemiJoin2IndexGetApply,
+		// Build-on-outer anti-semi hash join (Hash Right Anti Join in PG).
+		ExfLeftAntiSemiJoin2HashJoinBuildOuter,
 		ExfInvalid,
 		ExfSentinel = ExfInvalid
 	};
