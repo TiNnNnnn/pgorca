@@ -127,6 +127,26 @@ CXformSimplifySubquery::FSimplifyExistential(CMemoryPool *mp,
 {
 	GPOS_ASSERT(CUtils::FExistentialSubquery(pexprScalar->Pop()));
 
+	// Skip the count(*)-rewrite for NOT EXISTS subqueries.  Converting
+	// `NOT EXISTS(...)` to `count(*) = 0` forces the resulting Apply to
+	// be unnested as a LEFT OUTER JOIN with a post-count filter -- a
+	// Magic-Sets-style decorrelation that pays a full GROUP BY scan on
+	// the inner side plus the LEFT OUTER's matched-bit bookkeeping.
+	// For typical NOT EXISTS correlations (equality predicate against an
+	// outer column) the direct LeftAntiSemiJoin path is much cheaper and
+	// CSubqueryHandler::FRemoveNotExistsSubquery generates it via
+	// LeftAntiSemiApply -> LeftAntiSemiJoin -> LeftAntiSemiHashJoin.
+	// Letting NOT EXISTS stay on the anti-semi path lets the cost model
+	// pick that physical implementation instead of being short-circuited
+	// into the count form (see TPC-H sf=5 Q22).  EXISTS still goes
+	// through the count rewrite -- it does not have the same execution-
+	// side asymmetry, and the semijoin path is already cheap for it.
+	if (COperator::EopScalarSubqueryNotExists ==
+		pexprScalar->Pop()->Eopid())
+	{
+		return false;
+	}
+
 	CExpression *pexprNewSubquery = nullptr;
 	CExpression *pexprCmp = nullptr;
 	CXformUtils::ExistentialToAgg(mp, pexprScalar, &pexprNewSubquery,
