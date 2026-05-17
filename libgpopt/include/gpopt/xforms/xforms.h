@@ -99,7 +99,6 @@
 #include "gpopt/xforms/CXformLeftAntiSemiApplyNotIn2LeftAntiSemiJoinNotInNoCorrelations.h"
 #include "gpopt/xforms/CXformLeftAntiSemiJoin2CrossProduct.h"
 #include "gpopt/xforms/CXformLeftAntiSemiJoin2HashJoin.h"
-#include "gpopt/xforms/CXformLeftAntiSemiJoin2HashJoinBuildOuter.h"
 #include "gpopt/xforms/CXformLeftAntiSemiJoin2NLJoin.h"
 #include "gpopt/xforms/CXformLeftAntiSemiJoinNotIn2CrossProduct.h"
 #include "gpopt/xforms/CXformLeftAntiSemiJoinNotIn2HashJoinNotIn.h"

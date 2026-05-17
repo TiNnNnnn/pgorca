@@ -1132,8 +1132,7 @@ CUtils::FAntiSemiHashJoin(COperator *pop)
 
 	COperator::EOperatorId eopid = pop->Eopid();
 	return (eopid == COperator::EopPhysicalLeftAntiSemiHashJoin ||
-			eopid == COperator::EopPhysicalLeftAntiSemiHashJoinNotIn ||
-			eopid == COperator::EopPhysicalLeftAntiSemiHashJoinBuildOuter);
+			eopid == COperator::EopPhysicalLeftAntiSemiHashJoinNotIn);
 }
 
 // check if a given operator is a correlated nested loops join
