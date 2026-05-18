@@ -90,6 +90,27 @@ bool  optimizer_print_optimization_context      = false;
 bool  optimizer_cte_inlining                    = false;
 int   optimizer_cte_inlining_bound              = 0;
 
+/* Statistics damping factors for multi-conjunct selectivity computation.
+ *
+ * Defaults match Apache Cloudberry (CBDB).  The previous pg_orca defaults
+ * (all 0.1) were too aggressive: the dampened scale factor for the 2nd+
+ * conjunct collapses below MinRows=1.0, so effectively only the most
+ * selective predicate counts.  Observed on TPC-H sf=10 Q12: the col-vs-col
+ * predicates ``l_commitdate < l_receiptdate`` and ``l_shipdate < l_commitdate``
+ * combined with ``l_shipmode IN ...`` and a date range made ORCA estimate
+ * ~8.6 M filtered rows (actual 310 K, ~27× over), which forced PG's Hash
+ * executor to pre-allocate 8 batches and spill to disk.
+ *
+ * - filter   = 0.75: moderate damping for correlated single-table conjuncts
+ * - groupby  = 0.75: same idea for multi-column group-by NDV inflation
+ * - join     = 0.0:  selects the modern sqrt-based join damping path
+ *                    (CScaleFactorUtils::CalcCumulativeScaleFactorSqrtAlg);
+ *                    >0 reverts to the legacy power-of-position formula.
+ */
+double optimizer_damping_factor_filter          = 0.75;
+double optimizer_damping_factor_join            = 0.0;
+double optimizer_damping_factor_groupby         = 0.75;
+
 
 #define JOIN_ORDER_IN_QUERY            0
 #define JOIN_ORDER_GREEDY_SEARCH       1
@@ -741,6 +762,29 @@ void _PG_init(void)
         "optimizer_use_streaming_hashagg",
         "Use streaming hash agg in ORCA-generated local partial hash aggregations.",
         NULL, &optimizer_use_streaming_hashagg, false,
+        PGC_USERSET, 0, NULL, NULL, NULL);
+
+    DefineCustomRealVariable(
+        "optimizer_damping_factor_filter",
+        "Damping factor (per-position multiplier) applied to multi-conjunct "
+        "filter selectivities.  1.0 = independence assumption.  Default 0.75 "
+        "matches Apache Cloudberry.",
+        NULL, &optimizer_damping_factor_filter, 0.75, 0.001, 1.0,
+        PGC_USERSET, 0, NULL, NULL, NULL);
+
+    DefineCustomRealVariable(
+        "optimizer_damping_factor_join",
+        "Damping factor applied to multi-condition join selectivities.  "
+        "0 selects the modern sqrt-based damping path (Cloudberry default); "
+        ">0 reverts to the legacy power-of-position formula.",
+        NULL, &optimizer_damping_factor_join, 0.0, 0.0, 1.0,
+        PGC_USERSET, 0, NULL, NULL, NULL);
+
+    DefineCustomRealVariable(
+        "optimizer_damping_factor_groupby",
+        "Damping factor applied to multi-column GROUP BY cardinality estimates.  "
+        "Default 0.75 matches Apache Cloudberry.",
+        NULL, &optimizer_damping_factor_groupby, 0.75, 0.001, 1.0,
         PGC_USERSET, 0, NULL, NULL, NULL);
 
     MarkGUCPrefixReserved("optimizer");

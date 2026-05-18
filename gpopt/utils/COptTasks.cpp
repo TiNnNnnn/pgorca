@@ -389,9 +389,9 @@ COptTasks::CreateOptimizerConfig(CMemoryPool *mp, ICostModel *cost_model,
 	ULLONG num_samples = (ULLONG) 1000 /* optimizer_samples_number */;
 	DOUBLE cost_threshold = (DOUBLE) 0.0 /* optimizer_cost_threshold */;
 
-	DOUBLE damping_factor_filter = (DOUBLE) 0.1 /* optimizer_damping_factor_filter */;
-	DOUBLE damping_factor_join = (DOUBLE) 0.1 /* optimizer_damping_factor_join */;
-	DOUBLE damping_factor_groupby = (DOUBLE) 0.1 /* optimizer_damping_factor_groupby */;
+	DOUBLE damping_factor_filter = (DOUBLE) optimizer_damping_factor_filter;
+	DOUBLE damping_factor_join = (DOUBLE) optimizer_damping_factor_join;
+	DOUBLE damping_factor_groupby = (DOUBLE) optimizer_damping_factor_groupby;
 
 	/* GPDB-only GUCs — use fixed defaults for PG18 single-node mode */
 	ULONG cte_inlining_cutoff = (ULONG) optimizer_cte_inlining_bound;

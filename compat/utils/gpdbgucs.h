@@ -34,6 +34,9 @@ extern int  optimizer_cte_inlining_bound;
 extern double optimizer_sort_factor;
 extern double optimizer_spilling_mem_threshold;
 extern double optimizer_index_join_allowed_risk_threshold;
+extern double optimizer_damping_factor_filter;
+extern double optimizer_damping_factor_join;
+extern double optimizer_damping_factor_groupby;
 
 /* --- string GUCs --- */
 extern char *optimizer_search_strategy_path;
