@@ -352,6 +352,16 @@ CFilterStatsProcessor::MakeHistHashMapConjFilter(
 
 	CBitSet *filter_colids = GPOS_NEW(mp) CBitSet(mp);
 	CDoubleArray *scale_factors = GPOS_NEW(mp) CDoubleArray(mp);
+	// Predicates that fall into the "unsupported" bucket (col-vs-col, ops over
+	// a computed column expression, untyped boolean shapes, …) have no
+	// histogram and are assigned a flat default scale factor.  Damping them
+	// alongside supported predicates via CalcScaleFactorCumulativeConj's
+	// per-position formula severely over-estimates the conjunction because the
+	// damping was designed to compensate for correlated predicates on the same
+	// column — and the unsupported group is, by construction, on different
+	// columns from the histogrammed group.  Accumulate them as an independent
+	// (no-damping) product instead.
+	CDouble unsupported_scale_factor(1.0);
 
 	// create copy of the original hash map of colid -> histogram
 	UlongToHistogramMap *result_histograms =
@@ -388,8 +398,8 @@ CFilterStatsProcessor::MakeHistHashMapConjFilter(
 			// for example, (expression OP const) where expression is a defined column like (a+b)
 			CStatsPredUnsupported *unsupported_pred_stats =
 				CStatsPredUnsupported::ConvertPredStats(child_pred_stats);
-			scale_factors->Append(
-				GPOS_NEW(mp) CDouble(unsupported_pred_stats->ScaleFactor()));
+			unsupported_scale_factor =
+				unsupported_scale_factor * unsupported_pred_stats->ScaleFactor();
 
 			continue;
 		}
@@ -495,7 +505,7 @@ CFilterStatsProcessor::MakeHistHashMapConjFilter(
 	CScaleFactorUtils::SortScalingFactor(scale_factors, true /* fDescending */);
 
 	*scale_factor = CScaleFactorUtils::CalcScaleFactorCumulativeConj(
-		stats_config, scale_factors);
+		stats_config, scale_factors) * unsupported_scale_factor;
 
 	// clean up
 	scale_factors->Release();
