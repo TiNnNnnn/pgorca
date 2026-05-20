@@ -42,6 +42,7 @@ CParseHandlerColStats::CParseHandlerColStats(
 	  m_null_freq(0.0),
 	  m_distinct_remaining(0.0),
 	  m_freq_remaining(0.0),
+	  m_correlation(0.0),
 	  m_is_column_stats_missing(false)
 {
 }
@@ -116,6 +117,16 @@ CParseHandlerColStats::StartElement(const XMLCh *const element_uri,
 			m_freq_remaining = CDXLOperatorFactory::ConvertAttrValueToDouble(
 				m_parse_handler_mgr->GetDXLMemoryManager(),
 				parsed_freq_remaining, EdxltokenColFreqRemain,
+				EdxltokenColumnStats);
+		}
+
+		const XMLCh *parsed_correlation =
+			attrs.getValue(CDXLTokens::XmlstrToken(EdxltokenColCorrelation));
+		if (nullptr != parsed_correlation)
+		{
+			m_correlation = CDXLOperatorFactory::ConvertAttrValueToDouble(
+				m_parse_handler_mgr->GetDXLMemoryManager(),
+				parsed_correlation, EdxltokenColCorrelation,
 				EdxltokenColumnStats);
 		}
 
@@ -198,7 +209,8 @@ CParseHandlerColStats::EndElement(const XMLCh *const,  // element_uri,
 
 	m_imd_obj = GPOS_NEW(m_mp) CDXLColStats(
 		m_mp, m_mdid, m_md_name, m_width, m_null_freq, m_distinct_remaining,
-		m_freq_remaining, dxl_stats_bucket_array, m_is_column_stats_missing);
+		m_freq_remaining, m_correlation, dxl_stats_bucket_array,
+		m_is_column_stats_missing);
 
 	// deactivate handler
 	m_parse_handler_mgr->DeactivateHandler();

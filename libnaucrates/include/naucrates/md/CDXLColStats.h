@@ -63,6 +63,9 @@ private:
 	// frequency of remaining tuples
 	CDouble m_freq_remaining;
 
+	// physical-order correlation (pg_statistic STATISTIC_KIND_CORRELATION)
+	CDouble m_correlation;
+
 	// histogram buckets
 	CDXLBucketArray *m_dxl_stats_bucket_array;
 
@@ -79,6 +82,7 @@ public:
 	CDXLColStats(CMemoryPool *mp, CMDIdColStats *mdid_col_stats,
 				 CMDName *mdname, CDouble width, CDouble null_freq,
 				 CDouble distinct_remaining, CDouble freq_remaining,
+				 CDouble correlation,
 				 CDXLBucketArray *dxl_stats_bucket_array,
 				 BOOL is_col_stats_missing);
 
@@ -123,6 +127,13 @@ public:
 	GetFreqRemain() const override
 	{
 		return m_freq_remaining;
+	}
+
+	// physical-order correlation
+	CDouble
+	Correlation() const override
+	{
+		return m_correlation;
 	}
 
 	// is the column statistics missing in the database

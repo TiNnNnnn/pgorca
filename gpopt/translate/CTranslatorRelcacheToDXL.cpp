@@ -2195,6 +2195,25 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 		is_dummy_stats = true;
 	}
 
+	// Extract physical-order correlation (pg_statistic STATISTIC_KIND_CORRELATION)
+	// before releasing the HeapTuple.  Consumed by the index-scan cost model to
+	// interpolate between sequential and random page fetches.  Missing slot ->
+	// 0.0 (worst-case random).
+	CDouble correlation(0.0);
+	{
+		AttStatsSlot corr_slot;
+		if (gpdb::GetAttrStatsSlot(&corr_slot, stats_tup,
+								   STATISTIC_KIND_CORRELATION, InvalidOid,
+								   ATTSTATSSLOT_NUMBERS))
+		{
+			if (corr_slot.nnumbers > 0)
+			{
+				correlation = CDouble(corr_slot.numbers[0]);
+			}
+			gpdb::FreeAttrStatsSlot(&corr_slot);
+		}
+	}
+
 	// Release the HeapTuple now — slots hold independent palloc'd copies of
 	// the Datum arrays (see DatumGetArrayTypePCopy in GetAttrStatsSlot), so
 	// stats_tup is no longer needed.  Freeing early avoids a SysCache pin
@@ -2260,7 +2279,8 @@ CTranslatorRelcacheToDXL::RetrieveColStats(CMemoryPool *mp,
 	mdid_col_stats->AddRef();
 	CDXLColStats *dxl_col_stats = GPOS_NEW(mp) CDXLColStats(
 		mp, mdid_col_stats, md_colname, width, null_freq, distinct_remaining,
-		freq_remaining, dxl_stats_bucket_array, false /* is_col_stats_missing */
+		freq_remaining, correlation, dxl_stats_bucket_array,
+		false /* is_col_stats_missing */
 	);
 
 	return dxl_col_stats;
@@ -2331,7 +2351,8 @@ CTranslatorRelcacheToDXL::GenerateStatsForSystemCols(
 
 	return GPOS_NEW(mp) CDXLColStats(
 		mp, mdid_col_stats, md_colname, width, null_freq, distinct_remaining,
-		freq_remaining, dxl_stats_bucket_array, is_col_stats_missing);
+		freq_remaining, CDouble(0.0) /* correlation */, dxl_stats_bucket_array,
+		is_col_stats_missing);
 }
 
 //---------------------------------------------------------------------------

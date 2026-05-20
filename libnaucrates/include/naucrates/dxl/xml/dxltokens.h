@@ -366,6 +366,7 @@ enum Edxltoken
 	EdxltokenColNullFreq,
 	EdxltokenColNdvRemain,
 	EdxltokenColFreqRemain,
+	EdxltokenColCorrelation,
 	EdxltokenColStatsMissing,
 
 	EdxltokenParamId,

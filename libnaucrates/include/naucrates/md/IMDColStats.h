@@ -60,6 +60,10 @@ public:
 	// is the columns statistics missing in the database
 	virtual BOOL IsColStatsMissing() const = 0;
 
+	// correlation between column value order and physical row order
+	// (pg_statistic STATISTIC_KIND_CORRELATION); -1.0 .. 1.0, 0.0 if unknown
+	virtual CDouble Correlation() const = 0;
+
 	// get the bucket at the given position
 	virtual const CDXLBucket *GetDXLBucketAt(ULONG ul) const = 0;
 };

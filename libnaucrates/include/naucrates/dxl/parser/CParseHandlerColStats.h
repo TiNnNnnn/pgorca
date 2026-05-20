@@ -59,6 +59,9 @@ private:
 	// frequency of remaining tuples
 	CDouble m_freq_remaining;
 
+	// physical-order correlation
+	CDouble m_correlation;
+
 	// is the column statistics missing in the database
 	BOOL m_is_column_stats_missing;
 
