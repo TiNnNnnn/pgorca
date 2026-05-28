@@ -553,7 +553,16 @@ CScaleFactorUtils::CalcScaleFactorCumulativeDisj(
 	GPOS_ASSERT(nullptr != scale_factors);
 
 	const ULONG num_cols = scale_factors->Size();
-	GPOS_ASSERT(0 < num_cols);
+
+	// Empty scale_factors is reachable from MakeHistHashMapDisjFilter's
+	// intermediate call (line 789) on the very first disjunctive predicate,
+	// before any per-branch scale factor has been appended.  Treat it as
+	// "no filter applied yet" — sf=1.0 — mirroring CalcScaleFactorCumulativeConj
+	// which returns 1.0 for the empty case.
+	if (0 == num_cols)
+	{
+		return CDouble(1.0);
+	}
 
 	if (1 == num_cols)
 	{

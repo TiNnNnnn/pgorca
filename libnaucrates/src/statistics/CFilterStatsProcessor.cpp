@@ -637,6 +637,14 @@ CFilterStatsProcessor::MakeHistHashMapDisjFilter(
 
 	CDouble cumulative_rows(CStatistics::MinRows.Get());
 
+	// Skip the placeholder previous_scale_factor (= input_rows sentinel)
+	// only on the very first predicate.  Using previous_colid==ulong_max as
+	// the gate is unsafe: multi-column conjunctive children inside an OR
+	// keep colid==ulong_max forever, so every iteration would be treated as
+	// "first" and scale_factors would never accumulate — eventually tripping
+	// the 0 < num_cols assert in CalcScaleFactorCumulativeDisj.
+	BOOL is_first_disj_pred = true;
+
 	// iterate over filters and update corresponding histograms
 	const ULONG filters = disjunctive_pred_stats->GetNumPreds();
 	for (ULONG ul = 0; ul < filters; ul++)
@@ -688,10 +696,8 @@ CFilterStatsProcessor::MakeHistHashMapDisjFilter(
 			// disjunct with selectivity 1/input_rows to the cumulative
 			// disjunction, inflating row estimates by ~1 row (cost_align
 			// #293: `b=3 OR b=5` on cb_hash_tbl returned 3 rows instead
-			// of PG's 2).  Only append once we've actually processed at
-			// least one predicate (previous_colid is no longer the
-			// sentinel ulong_max).
-			if (gpos::ulong_max != previous_colid)
+			// of PG's 2).
+			if (!is_first_disj_pred)
 			{
 				scale_factors->Append(GPOS_NEW(mp)
 										  CDouble(previous_scale_factor.Get()));
@@ -802,6 +808,7 @@ CFilterStatsProcessor::MakeHistHashMapDisjFilter(
 		}
 
 		CRefCount::SafeRelease(child_histograms);
+		is_first_disj_pred = false;
 	}
 
 	// process the result and scaling factor of the last predicate
