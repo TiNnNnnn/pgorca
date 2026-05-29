@@ -14,6 +14,7 @@
 
 #include "gpdbcost/CCostModelPG.h"
 
+#include "pg_config.h"	// for BLCKSZ (PG's compiled-in block size)
 #include "gpos/base.h"
 
 #include "gpopt/base/CAutoOptCtxt.h"
@@ -145,7 +146,7 @@ HashAggSpillCost(DOUBLE input_rows, DOUBLE input_width, DOUBLE numGroups,
 	constexpr DOUBLE kHeapTupleHeader = 24.0;
 	const DOUBLE bytes_per_tuple = MaxAlign8(input_width) + kHeapTupleHeader;
 	const DOUBLE pages =
-		(input_rows * bytes_per_tuple) / 8192.0;
+		(input_rows * bytes_per_tuple) / static_cast<DOUBLE>(BLCKSZ);
 
 	// pages_written = pages_read = pages × depth, doubled for hardware
 	// penalty.  Each contributes once to path->total_cost.
@@ -292,7 +293,7 @@ CCostModelPG::CostScan(CMemoryPool *mp,
 	// with rows*width/BLCKSZ; better than charging 0 IO.
 	if (pages <= CDouble(0.0))
 	{
-		const CDouble kBlockSize(8192.0);
+		const CDouble kBlockSize(static_cast<DOUBLE>(BLCKSZ));
 		CDouble rough = (pci->Rows() * pci->Width()) / kBlockSize;
 		pages = CDouble(std::ceil(rough.Get()));
 		if (pages < CDouble(1.0))
@@ -779,20 +780,20 @@ CCostModelPG::CostSort(CMemoryPool *,  // mp
 	DOUBLE disk_cost = 0.0;
 	if (input_bytes > sort_mem_bytes && sort_mem_bytes > 0.0)
 	{
-		const DOUBLE npages = std::ceil(input_bytes / 8192.0);
+		const DOUBLE npages = std::ceil(input_bytes / static_cast<DOUBLE>(BLCKSZ));
 		const DOUBLE nruns = input_bytes / sort_mem_bytes;
 		// PG tuplesort_merge_order (tuplesort.c:1778):
 		//   mOrder = allowedMem / (2 × TAPE_BUFFER_OVERHEAD + MERGE_BUFFER_SIZE)
 		//          = allowedMem / (2 × BLCKSZ + 32 × BLCKSZ)
-		//          = allowedMem / (34 × 8192)
+		//          = allowedMem / (34 × BLCKSZ)
 		// clamped to [MINORDER=6, MAXORDER=500].  At 4 MB work_mem this
 		// gives ~15; at 64 MB it gives ~241.  ORCA previously hardcoded the
 		// MINORDER=6 floor, over-billing log_runs by ~log(15)/log(6) ≈ 1.5×
 		// at default work_mem.
 		constexpr DOUBLE kMinOrder = 6.0;
 		constexpr DOUBLE kMaxOrder = 500.0;
-		constexpr DOUBLE kTapeBufferOverhead = 8192.0;
-		constexpr DOUBLE kMergeBufferSize = 8192.0 * 32.0;
+		constexpr DOUBLE kTapeBufferOverhead = static_cast<DOUBLE>(BLCKSZ);
+		constexpr DOUBLE kMergeBufferSize = static_cast<DOUBLE>(BLCKSZ) * 32.0;
 		const DOUBLE merge_order_raw =
 			sort_mem_bytes /
 			(2.0 * kTapeBufferOverhead + kMergeBufferSize);
@@ -1437,10 +1438,10 @@ CCostModelPG::CostHashJoin(CMemoryPool *,  // mp
 		if (mem_limit > 0.0 && inner_bytes > mem_limit)
 		{
 			const DOUBLE inner_pages =
-				std::ceil(inner_bytes / 8192.0);
+				std::ceil(inner_bytes / static_cast<DOUBLE>(BLCKSZ));
 			const DOUBLE outer_pages = std::ceil(
 				outer_rows * (MaxAlign8(outer_width) + kHeapTupleHeader) /
-				8192.0);
+				static_cast<DOUBLE>(BLCKSZ));
 			spill_io =
 				2.0 * seq_page_cost * (inner_pages + outer_pages);
 		}
@@ -1611,7 +1612,7 @@ ComputeIndexScanIOAmortizationDelta(COperator *inner_op,
 	constexpr DOUBLE kIndexEntrySize = 24.0;
 	const DOUBLE index_pages = (index_pages_md > 0.0)
 		? index_pages_md
-		: std::max(1.0, std::ceil(N * kIndexEntrySize / 8192.0));
+		: std::max(1.0, std::ceil(N * kIndexEntrySize / static_cast<DOUBLE>(BLCKSZ)));
 
 	DOUBLE correlation = 0.0;
 	if (index->Keys() > 0)
@@ -1880,7 +1881,7 @@ CCostModelPG::CostIndexScan(CMemoryPool *mp,
 	const DOUBLE index_pages =
 		(index_pages_from_md > 0.0)
 			? index_pages_from_md
-			: std::max(1.0, std::ceil(N * kIndexEntrySize / 8192.0));
+			: std::max(1.0, std::ceil(N * kIndexEntrySize / static_cast<DOUBLE>(BLCKSZ)));
 
 	// Mackert-Lohman.  PG handles loop_count > 1 by computing pages across
 	// all loops then pro-rating per scan; this models cache reuse.
@@ -2515,7 +2516,7 @@ CCostModelPG::CostBitmapTableScan(CMemoryPool *,  // mp
 	const DOUBLE index_pages =
 		(index_pages_real > 0.0)
 			? index_pages_real
-			: std::max(1.0, std::ceil(N * kIndexEntrySize / 8192.0));
+			: std::max(1.0, std::ceil(N * kIndexEntrySize / static_cast<DOUBLE>(BLCKSZ)));
 	// Btree descent matches CostIndexScan (PG btcostestimate); see the
 	// detailed comment block there.  Use index->tuples ≈ N (not table
 	// pages) for log2(...), and approximate tree_height as log_100(index_pages).
@@ -3095,7 +3096,7 @@ CCostModelPG::CostSequence(CMemoryPool *,  // mp
 //	            = tuples × (MAXALIGN(width) + 24)
 //	  work_mem_bytes = work_mem × 1024            -- work_mem GUC is in KB
 //	  if nbytes > work_mem_bytes:
-//	    npages    = ceil(nbytes / BLCKSZ)         -- BLCKSZ = 8192
+//	    npages    = ceil(nbytes / BLCKSZ)         -- PG's compiled block size
 //	    run_cost += seq_page_cost × npages
 //
 //	The 2 × cpu_operator_cost rate (vs cost_rescan's cpu_operator_cost) is
@@ -3127,8 +3128,7 @@ CCostModelPG::CostSpool(CMemoryPool *,	// mp
 		static_cast<DOUBLE>(work_mem) * 1024.0;
 	if (nbytes > work_mem_bytes)
 	{
-		const DOUBLE BLCKSZ_d = 8192.0;
-		const DOUBLE npages = std::ceil(nbytes / BLCKSZ_d);
+		const DOUBLE npages = std::ceil(nbytes / static_cast<DOUBLE>(BLCKSZ));
 		run_cost += seq_page_cost * npages;
 	}
 
