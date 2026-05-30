@@ -616,6 +616,11 @@ int FindNodes(Node *node, List *nodeTags);
 // look for nodes with non-default collation; returns 1 if any exist, -1 otherwise
 int CheckCollation(Node *node);
 
+// check if ORDER BY uses an ordering operator (amoppurpose=AMOP_ORDER in
+// pg_amop) with at least one direct Var arg. ORCA cannot generate KNN
+// ordered index scans; caller should fall back to the PG planner.
+bool HasOrderByOrderingOp(Query *query);
+
 Node *CoerceToCommonType(ParseState *pstate, Node *node, Oid target_type,
 						 const char *context);
 

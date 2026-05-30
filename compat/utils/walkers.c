@@ -15,16 +15,23 @@
  *   - extract_nodes_plan() and helpers
  *   - find_nodes()
  *   - check_collation() and helpers
+ *   - has_orderby_ordering_op() and helpers
  */
 
 #include "postgres.h"
 
+#include "access/htup_details.h"
+#include "catalog/pg_amop.h"
+#include "catalog/pg_collation.h"
+#include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/plannodes.h"
 #include "optimizer/optimizer.h"
-#include "catalog/pg_collation.h"
-#include "catalog/pg_type.h"
+#include "parser/parsetree.h"
+#include "utils/catcache.h"
+#include "utils/lsyscache.h"
+#include "utils/syscache.h"
 
 /* -----------------------------------------------------------------------
  * Internal types
@@ -668,4 +675,106 @@ check_collation(Node *node)
 	context.foundNonDefaultCollation = -1;
 	check_collation_walker(node, &context);
 	return context.foundNonDefaultCollation;
+}
+
+/* -----------------------------------------------------------------------
+ * has_orderby_ordering_op — detect KNN-style ORDER BY (amcanorderbyop)
+ *
+ * Ported from Apache Cloudberry (#1653). ORCA is unaware of
+ * amcanorderbyop, so "ORDER BY col <-> val" gets a Seq Scan + Sort plan
+ * instead of a native KNN ordered index scan. Detecting this pattern at
+ * Query→DXL translation time lets us fall back to the PG planner, which
+ * generates an efficient Index (Only) Scan with native KNN ordering.
+ * ----------------------------------------------------------------------- */
+
+/*
+ * is_ordering_op
+ *
+ * Return true if the operator is registered as an ordering operator
+ * (amoppurpose = AMOP_ORDER) in any opfamily in pg_amop.
+ */
+static bool
+is_ordering_op(Oid opno)
+{
+	CatCList   *catlist = SearchSysCacheList1(AMOPOPID,
+											  ObjectIdGetDatum(opno));
+	bool		found = false;
+
+	for (int i = 0; i < catlist->n_members; i++)
+	{
+		HeapTuple	tp = &catlist->members[i]->tuple;
+		Form_pg_amop amop = (Form_pg_amop) GETSTRUCT(tp);
+
+		if (amop->amoppurpose == AMOP_ORDER)
+		{
+			found = true;
+			break;
+		}
+	}
+	ReleaseSysCacheList(catlist);
+	return found;
+}
+
+/*
+ * has_plain_var_arg
+ *
+ * Return true if the OpExpr has at least one direct Var argument
+ * (not wrapped in a function or other expression). Implicit coercions
+ * (RelabelType, e.g. varchar→text) are stripped before the check.
+ */
+static bool
+has_plain_var_arg(OpExpr *op)
+{
+	ListCell   *arg_lc;
+
+	foreach(arg_lc, op->args)
+	{
+		Node	   *arg = strip_implicit_coercions(lfirst(arg_lc));
+
+		if (IsA(arg, Var))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * has_orderby_ordering_op
+ *
+ * Return true only when ALL ordering-operator expressions in ORDER BY
+ * have at least one direct Var argument. Expressions like
+ * "circle(p,1) <-> point(0,0)" wrap the column in a function, which can
+ * cause "lossy distance functions are not supported in index-only scans"
+ * errors in the PG planner — leave those for ORCA's Seq Scan + Sort.
+ */
+bool
+has_orderby_ordering_op(Query *query)
+{
+	ListCell   *lc;
+	bool		found_ordering_op = false;
+
+	if (query->sortClause == NIL)
+		return false;
+
+	foreach(lc, query->sortClause)
+	{
+		SortGroupClause *sgc = (SortGroupClause *) lfirst(lc);
+		TargetEntry *tle = get_sortgroupclause_tle(sgc, query->targetList);
+		Node	   *expr = (Node *) tle->expr;
+		OpExpr	   *opexpr;
+
+		if (!IsA(expr, OpExpr))
+			continue;
+
+		opexpr = (OpExpr *) expr;
+
+		if (!is_ordering_op(opexpr->opno))
+			continue;
+
+		found_ordering_op = true;
+
+		if (!has_plain_var_arg(opexpr))
+			return false;
+	}
+
+	return found_ordering_op;
 }

@@ -358,6 +358,17 @@ CTranslatorQueryToDXL::CheckUnsupportedNodeTypes(Query *query)
 		GPOS_RAISE(gpdxl::ExmaDXL, gpdxl::ExmiQuery2DXLUnsupportedFeature,
 				   GPOS_WSZ_LIT("Non-default collation"));
 	}
+
+	// ORCA does not support amcanorderbyop (KNN ordered index scans).
+	// Fall back to the PostgreSQL planner for queries whose ORDER BY
+	// contains an ordering operator (e.g., <-> for distance) on a
+	// plain column reference.
+	if (gpdb::HasOrderByOrderingOp(query))
+	{
+		GPOS_RAISE(gpdxl::ExmaDXL, gpdxl::ExmiQuery2DXLUnsupportedFeature,
+				   GPOS_WSZ_LIT(
+					   "ORDER BY with ordering operator (amcanorderbyop)"));
+	}
 }
 
 //---------------------------------------------------------------------------

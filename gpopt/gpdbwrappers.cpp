@@ -522,6 +522,7 @@ gpdb::TypeCollation(Oid type)
 extern "C" List *extract_nodes_plan(Plan *pl, int nodeTag, bool descendIntoSubqueries);
 extern "C" int find_nodes(Node *node, List *nodeTags);
 extern "C" int check_collation(Node *node);
+extern "C" bool has_orderby_ordering_op(Query *query);
 
 List *
 gpdb::ExtractNodesPlan(Plan *pl, int node_tag, bool descend_into_subqueries)
@@ -2547,6 +2548,17 @@ gpdb::CheckCollation(Node *node)
 	}
 	GP_WRAP_END;
 	return -1;
+}
+
+bool
+gpdb::HasOrderByOrderingOp(Query *query)
+{
+	GP_WRAP_START;
+	{
+		return has_orderby_ordering_op(query);
+	}
+	GP_WRAP_END;
+	return false;
 }
 
 Node *
