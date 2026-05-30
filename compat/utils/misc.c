@@ -1620,7 +1620,8 @@ transformGroupedWindows(Node *node, void *context)
 		grouped_window_ctx ctx;
 
 		Assert(qry->commandType == CMD_SELECT);
-		Assert(!PointerIsValid(qry->utilityStmt));
+		/* PG19 removed the PointerIsValid macro from c.h; spell it out. */
+		Assert(qry->utilityStmt == NULL);
 		Assert(qry->returningList == NIL);
 
 		/*
@@ -1718,7 +1719,7 @@ transformGroupedWindows(Node *node, void *context)
 		/* Might have changed */
 		subq->hasSubLinks = checkExprHasSubLink((Node *) subq);
 
-		Assert(PointerIsValid(qry->targetList));
+		Assert(qry->targetList != NIL);
 		Assert(IsA(qry->targetList, List));
 
 		if (hadSubLinks != (qry->hasSubLinks || subq->hasSubLinks))

@@ -514,7 +514,14 @@ dts_begin(CustomScanState *node, EState *estate, int eflags)
 	 */
 	ExecInitScanTupleSlot(estate, &node->ss,
 						  RelationGetDescr(state->root_rel),
-						  &TTSOpsBufferHeapTuple);
+						  &TTSOpsBufferHeapTuple
+#if PG_VERSION_NUM >= 190000
+						  /* PG19 added an eflags parameter so the slot can be
+						   * created lazily when EXPLAIN-only execution skips
+						   * the heap.  Forward the executor's eflags. */
+						  , (uint16) eflags
+#endif
+						  );
 
 	/* conv_slot holds remapped tuples in root column order */
 	state->conv_slot = MakeSingleTupleTableSlot(RelationGetDescr(state->root_rel),
@@ -692,7 +699,16 @@ dts_exec(CustomScanState *node)
 		state->convert_map = convert_tuples_by_name(part_desc, root_desc);
 
 		state->scan_desc = table_beginscan(state->cur_rel,
-										   estate->es_snapshot, 0, NULL);
+										   estate->es_snapshot, 0, NULL
+#if PG_VERSION_NUM >= 190000
+										   /* PG19 lifted the flags arg out of
+										    * the table_beginscan inline wrapper.
+										    * Pass the same default a plain
+										    * sequential scan used in PG18. */
+										   , SO_TYPE_SEQSCAN | SO_ALLOW_STRAT |
+											 SO_ALLOW_SYNC | SO_ALLOW_PAGEMODE
+#endif
+										   );
 	}
 }
 

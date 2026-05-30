@@ -17,6 +17,7 @@
 extern "C" {
 #include "postgres.h"
 
+#include "access/attmap.h"
 #include "access/sysattr.h"
 #include "catalog/gp_distribution_policy.h"
 #include "catalog/pg_collation.h"
@@ -343,7 +344,20 @@ CTranslatorDXLToPlStmt::GetPlannedStmtFromDXL(const CDXLNode *dxlnode,
 
 	planned_stmt->commandType = m_cmd_type;
 
+#if PG_VERSION_NUM >= 190000
+	/* PG19 renamed PlannedStmt::resultRelations (List of RT indexes) to
+	 * resultRelationRelids and changed its type to Bitmapset *.  Convert the
+	 * int list we built up during DXL translation into a bitmapset. */
+	{
+		Bitmapset *bms = NULL;
+		ListCell  *lc;
+		foreach(lc, m_result_rel_list)
+			bms = bms_add_member(bms, lfirst_int(lc));
+		planned_stmt->resultRelationRelids = bms;
+	}
+#else
 	planned_stmt->resultRelations = m_result_rel_list;
+#endif
 	/* intoPolicy / slices / numSlices / subplan_sliceIds are GPDB MPP-only
 	 * fields absent from PG18's PlannedStmt — ignored in single-node mode. */
 	(void) m_dxl_to_plstmt_context->GetDistributionPolicy();

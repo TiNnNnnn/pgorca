@@ -559,7 +559,11 @@ pg_orca_count_query_relations(Query *query)
  * ---------------------------------------------------------------- */
 static PlannedStmt *
 pg_orca_planner(Query *parse, const char *query_string,
-                int cursorOptions, ParamListInfo boundParams)
+                int cursorOptions, ParamListInfo boundParams
+#if PG_VERSION_NUM >= 190000
+                , ExplainState *es
+#endif
+                )
 {
     /* Pure-expression queries (no rtable): ORCA would produce a plan that
      * breaks plpgsql's exec_simple_check_plan assertion — fall back.
@@ -664,9 +668,15 @@ pg_orca_planner(Query *parse, const char *query_string,
     }
 
 fallback:
+#if PG_VERSION_NUM >= 190000
+    if (prev_planner_hook)
+        return prev_planner_hook(parse, query_string, cursorOptions, boundParams, es);
+    return standard_planner(parse, query_string, cursorOptions, boundParams, es);
+#else
     if (prev_planner_hook)
         return prev_planner_hook(parse, query_string, cursorOptions, boundParams);
     return standard_planner(parse, query_string, cursorOptions, boundParams);
+#endif
 }
 
 /* ----------------------------------------------------------------

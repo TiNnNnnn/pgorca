@@ -154,7 +154,14 @@ gpdb::DatumFromInt8(int8 i8)
 {
 	GP_WRAP_START;
 	{
+#if PG_VERSION_NUM >= 190000
+		/* Int8GetDatum was removed in PG19 along with the redundant
+		 * signed/unsigned 8-bit Datum constructors; the underlying
+		 * representation is the same as UInt8GetDatum for a one-byte value. */
+		return UInt8GetDatum((uint8) i8);
+#else
 		return Int8GetDatum(i8);
+#endif
 	}
 	GP_WRAP_END;
 	return 0;
@@ -2894,7 +2901,12 @@ static int64 mdcache_invalidation_counter = 0;
 static int64 last_mdcache_invalidation_counter = 0;
 
 static void
-mdsyscache_invalidation_counter_callback(Datum /*arg*/, int /*cacheid*/,
+mdsyscache_invalidation_counter_callback(Datum /*arg*/,
+#if PG_VERSION_NUM >= 190000
+										 SysCacheIdentifier /*cacheid*/,
+#else
+										 int /*cacheid*/,
+#endif
 										 uint32 /*hashvalue*/)
 {
 	mdcache_invalidation_counter++;
@@ -2910,7 +2922,11 @@ static void
 register_mdcache_invalidation_callbacks(void)
 {
 	/* These are all the catalog tables that we care about. */
+#if PG_VERSION_NUM >= 190000
+	SysCacheIdentifier metadata_caches[] = {
+#else
 	int metadata_caches[] = {
+#endif
 		AGGFNOID,		  /* pg_aggregate */
 		AMOPOPID,		  /* pg_amop */
 		CASTSOURCETARGET, /* pg_cast */
@@ -3332,12 +3348,21 @@ gpdb::GetRelAmName(Oid reloid)
 }
 
 // Get IndexAmRoutine struct for the given access method handler.
+//
+// PG19 marked GetIndexAmRoutine() as returning a const pointer (the returned
+// struct lives in a relcache-allocated context and must not be mutated by
+// callers). pg_orca only reads the struct, so const_cast'ing here is safe and
+// keeps the wrapper signature stable across PG18/PG19.
 IndexAmRoutine *
 gpdb::GetIndexAmRoutineFromAmHandler(Oid am_handler)
 {
 	GP_WRAP_START;
 	{
+#if PG_VERSION_NUM >= 190000
+		return const_cast<IndexAmRoutine *>(GetIndexAmRoutine(am_handler));
+#else
 		return GetIndexAmRoutine(am_handler);
+#endif
 	}
 	GP_WRAP_END;
 }
