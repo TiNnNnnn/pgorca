@@ -707,14 +707,18 @@ CTranslatorDXLToPlStmt::FinalizeParamIds(Plan *plan)
 #if PG_VERSION_NUM >= 190000
 	/* PG19 added Result::result_type and asserts in explain.c:4989 that
 	 * "result_type != RESULT_TYPE_GATING" whenever a Result has no subplan.
-	 * MakeNode() zero-inits, which maps to GATING; convert any zero-init'd
-	 * Result-without-child to UPPER (the canonical "replace degenerate upper
-	 * rel" classification used by make_one_row_result()). */
+	 * MakeNode() zero-inits to GATING, so reclassify Result-without-child.
+	 *
+	 * Pick RESULT_TYPE_SCAN rather than UPPER/JOIN: show_result_replacement_info()
+	 * in explain.c suppresses the "Replaces:" annotation when
+	 *   result_type == RESULT_TYPE_SCAN && nrels <= 1 && !found_non_result
+	 * and our relids stays NULL (MakeNode zero-init), so nrels = 0 and the
+	 * suppression triggers — keeping EXPLAIN output identical to PG18. */
 	if (IsA(plan, Result))
 	{
 		Result *r = (Result *) plan;
 		if (r->plan.lefttree == NULL && r->result_type == RESULT_TYPE_GATING)
-			r->result_type = RESULT_TYPE_UPPER;
+			r->result_type = RESULT_TYPE_SCAN;
 	}
 #endif
 
