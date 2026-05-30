@@ -34,6 +34,17 @@
 -- m/CONTEXT:.*SQL function .* during inlining/
 -- s/during inlining/statement 1/
 --
+-- # PG19 redesigned EXPLAIN SubPlan labelling. ruleutils.c now always
+-- # prepends "SubPlan " (or "InitPlan ") to SubPlan.plan_name. ORCA's
+-- # plan_name remains the PG18-style "SubPlan N", so the rendered text on
+-- # PG19 becomes "SubPlan SubPlan N". For PG-fallback queries, PG19's
+-- # planner runs choose_plan_name() and produces semantic tails like
+-- # "exists_N" / "any_N" / "in_N" / "hashed_N". Normalize every variant
+-- # back to PG18's bare "SubPlan N" so a single expected file works on
+-- # both major versions.
+-- m/SubPlan (?:SubPlan |exists_|any_|in_|hashed_)\d+/
+-- s/SubPlan (?:SubPlan |exists_|any_|in_|hashed_)(\d+)/SubPlan $1/g
+--
 -- end_matchsubs
 
 -- start_matchignore
