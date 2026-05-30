@@ -3130,8 +3130,14 @@ CTranslatorRelcacheToDXL::IsIndexSupported(Relation index_rel)
 	// limit ORCA's ability to operate on that table.
 	CAutoMemoryPool amp;
 	CMemoryPool *mp = amp.Pmp();
+	// gpdb::GetRelAmName takes a *relation* OID (it looks up pg_class to find
+	// relam), not an AM OID. Passing index_rel->rd_rel->relam — the AM OID
+	// itself — makes SearchSysCache1(RELOID, ...) miss and return nullptr,
+	// which then asserts in CDXLUtils.cpp:1496 (GPOS_ASSERT(nullptr != c))
+	// before the graceful fallback below has a chance to run. Pass the
+	// index relation's own OID instead.
 	CWStringDynamic *am_name_str = CDXLUtils::CreateDynamicStringFromCharArray(
-		mp, gpdb::GetRelAmName(index_rel->rd_rel->relam));
+		mp, gpdb::GetRelAmName(index_rel->rd_id));
 
 	if (am_name_str->Equals(GPOS_WSZ_LIT("ivfflat")) ||
 		am_name_str->Equals(GPOS_WSZ_LIT("hnsw")))
