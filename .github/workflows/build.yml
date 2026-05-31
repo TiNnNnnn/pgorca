@@ -179,6 +179,79 @@ jobs:
       - name: Build
         run: cmake --build build -j "$(nproc)"
 
+  build-rocky-pg19:
+    name: rockylinux:9 / gcc / Debug + tests (PG19)
+    runs-on: ubuntu-latest
+    container:
+      image: rockylinux:9
+
+    steps:
+      - name: Install OS packages
+        # PG19 is still in development (19devel/19-alpha) so it lives in
+        # pgdg-yum-testing, not the stable PGDG repo.  pgdg-redhat-repo-latest
+        # ships a /etc/yum.repos.d/pgdg-redhat-all.repo with a disabled
+        # `pgdg19-updates-testing` section -- enable it before installing.
+        # perl-IPC-Run is needed by pg_regress.
+        run: |
+          set -eux
+          dnf -y install dnf-plugins-core epel-release
+          dnf -y config-manager --set-enabled crb
+          dnf -qy module disable postgresql
+          dnf -y install \
+            https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+          dnf -y config-manager --set-enabled pgdg19-updates-testing
+          dnf -y install \
+            postgresql19 postgresql19-server postgresql19-contrib postgresql19-devel \
+            xerces-c-devel \
+            cmake ninja-build gcc-c++ \
+            git diffutils \
+            perl perl-IPC-Run
+
+      - uses: actions/checkout@v5
+
+      - name: Show toolchain versions
+        run: |
+          set -eux
+          /usr/pgsql-19/bin/pg_config --version
+          cmake --version
+          ninja --version
+          gcc --version
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DPG_CONFIG=/usr/pgsql-19/bin/pg_config
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+
+      - name: Install
+        run: cmake --install build
+
+      - name: Run ORCA tests (--orca-tests)
+        # pg_regress's --temp-instance calls initdb, which refuses to run as
+        # root.  Create a regular user and hand over the workspace.
+        run: |
+          set -eux
+          useradd -m runner
+          chown -R runner:runner "$GITHUB_WORKSPACE"
+          runuser -u runner -- bash -c '
+            set -eux
+            export PATH=/usr/pgsql-19/bin:$PATH
+            cd "$GITHUB_WORKSPACE"
+            test/test.sh --orca-tests
+          '
+
+      - name: Upload test artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocky-pg19-test-results
+          path: |
+            build/test_parallel/
+            build/tmp_check_parallel/log/
+
   build-arm64:
     name: ubuntu-24.04-arm / gcc / Debug
     runs-on: ubuntu-24.04-arm
