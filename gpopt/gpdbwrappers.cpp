@@ -72,6 +72,20 @@ extern "C" {
 #include "utils/datum.h"
 #include "compat/utils/misc.h"
 }
+
+#if PG_VERSION_NUM >= 190000
+/* PG19 (commit d4a080b8a1) removed the Int8GetDatum() helper from
+ * postgres.h on the grounds that PG core never used it.  The body was
+ * literally `return (Datum) X;` and the inverse DatumGetInt8 was never
+ * defined either.  Drop in a byte-identical replacement so the rest of
+ * the wrappers can keep calling Int8GetDatum() unchanged on both
+ * versions — and so anything PG might add back later wins via the
+ * #ifndef guard.  See the pgsql-hackers thread linked from that commit
+ * for the discussion. */
+#ifndef Int8GetDatum
+#define Int8GetDatum(X) ((Datum) (X))
+#endif
+#endif
 #define GP_WRAP_START                                            \
 	sigjmp_buf local_sigjmp_buf;                                 \
 	{                                                            \
@@ -154,14 +168,7 @@ gpdb::DatumFromInt8(int8 i8)
 {
 	GP_WRAP_START;
 	{
-#if PG_VERSION_NUM >= 190000
-		/* Int8GetDatum was removed in PG19 along with the redundant
-		 * signed/unsigned 8-bit Datum constructors; the underlying
-		 * representation is the same as UInt8GetDatum for a one-byte value. */
-		return UInt8GetDatum((uint8) i8);
-#else
 		return Int8GetDatum(i8);
-#endif
 	}
 	GP_WRAP_END;
 	return 0;
