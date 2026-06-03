@@ -650,6 +650,16 @@ pg_orca_planner(Query *parse, const char *query_string,
             result->planId = ORCA_PLAN_ID;
 
             /*
+             * Copy queryId / source-text location from the Query like
+             * standard_planner does.  Without these, pg_stat_statements
+             * filters out every ORCA plan (it requires queryId != 0) and
+             * can't split multi-statement source strings correctly.
+             */
+            result->queryId = parse->queryId;
+            result->stmt_location = parse->stmt_location;
+            result->stmt_len = parse->stmt_len;
+
+            /*
              * Strip gratuitous Result nodes ORCA emits for pure projection.
              * Ported from Cloudberry's post-ORCA cleanup
              * (src/backend/optimizer/plan/orca.c).
