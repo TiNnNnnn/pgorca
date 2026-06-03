@@ -662,6 +662,32 @@ pg_orca_planner(Query *parse, const char *query_string,
             }
 
             /*
+             * Collect plan-cache invalidation deps from the Query tree, like
+             * vanilla standard_planner does at its tail.  ORCA skips
+             * set_plan_references, so without this functions and view OIDs
+             * never reach invalItems/relationOids and cached plans don't
+             * invalidate on DROP / CREATE OR REPLACE.
+             */
+            {
+                List *eq_relationOids = NIL;
+                List *eq_invalItems = NIL;
+                bool  eq_dependsOnRole = false;
+                /* extract_query_dependencies' 4th out-param is named
+                 * hasRowSecurity in the API but is really the dependsOnRole
+                 * flag (see comment "Hack: we use glob.dependsOnRole" in
+                 * setrefs.c). */
+                extract_query_dependencies((Node *) pqueryCopy,
+                                           &eq_relationOids,
+                                           &eq_invalItems,
+                                           &eq_dependsOnRole);
+                result->relationOids = list_concat(result->relationOids,
+                                                   eq_relationOids);
+                result->invalItems = list_concat(result->invalItems,
+                                                 eq_invalItems);
+                result->dependsOnRole = result->dependsOnRole || eq_dependsOnRole;
+            }
+
+            /*
              * Like standard_planner, add a Material node on top if this is a
              * scrollable cursor and the plan doesn't support backward scans.
              * ORCA-generated plans may contain SubPlan expressions (e.g. for
