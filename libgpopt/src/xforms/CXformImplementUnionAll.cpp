@@ -72,32 +72,12 @@ CXformImplementUnionAll::Transform(CXformContext *pxfctxt, CXformResult *pxfres,
 	}
 
 	CPhysicalUnionAll *popPhysicalSerialUnionAll =
-		factory.PopPhysicalUnionAll(mp, false);
+		factory.PopPhysicalUnionAll(mp);
 
-	// assemble serial union physical operator
 	CExpression *pexprSerialUnionAll =
 		GPOS_NEW(mp) CExpression(mp, popPhysicalSerialUnionAll, pdrgpexpr);
 
-	// add serial union alternative to results
 	pxfres->Add(pexprSerialUnionAll);
-
-	// parallel union alternative to the result if the GUC is on
-	BOOL fParallel = GPOS_FTRACE(EopttraceEnableParallelAppend);
-
-	if (fParallel)
-	{
-		CPhysicalUnionAll *popPhysicalParallelUnionAll =
-			factory.PopPhysicalUnionAll(mp, true);
-
-		pdrgpexpr->AddRef();
-
-		// assemble physical parallel operator
-		CExpression *pexprParallelUnionAll = GPOS_NEW(mp)
-			CExpression(mp, popPhysicalParallelUnionAll, pdrgpexpr);
-
-		// add parallel union alternative to results
-		pxfres->Add(pexprParallelUnionAll);
-	}
 }
 
 // EOF

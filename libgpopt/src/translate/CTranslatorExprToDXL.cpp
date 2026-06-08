@@ -527,7 +527,6 @@ CTranslatorExprToDXL::CreateDXLNode(CExpression *pexpr,
 				pfDML);
 			break;
 		case COperator::EopPhysicalSerialUnionAll:
-		case COperator::EopPhysicalParallelUnionAll:
 			dxlnode = CTranslatorExprToDXL::PdxlnAppend(
 				pexpr, colref_array, pdrgpdsBaseTables, pulNonGatherMotions,
 				pfDML);

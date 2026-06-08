@@ -167,9 +167,6 @@ enum EOptTraceFlag
 	// prune unused computed columns
 	EopttraceDisablePruneUnusedComputedColumns = 103024,
 
-	// enable parallel append
-	EopttraceEnableParallelAppend = 103025,
-
 	// create constraint intervals from array expressions in preprocessing
 	EopttraceArrayConstraints = 103026,
 

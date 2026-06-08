@@ -795,11 +795,6 @@ CCostModelGPDB::CostUnionAll(CMemoryPool *mp, CExpressionHandle &exprhdl,
 	GPOS_ASSERT(nullptr != pci);
 	GPOS_ASSERT(nullptr != CPhysicalUnionAll::PopConvert(exprhdl.Pop()));
 
-	if (COperator::EopPhysicalParallelUnionAll == exprhdl.Pop()->Eopid())
-	{
-		return CostMaxChild(mp, exprhdl, pci, pcmgpdb->GetCostModelParams());
-	}
-
 	CCost costLocal = CCost(pci->NumRebinds() *
 							CostTupleProcessing(pci->Rows(), pci->Width(),
 												pcmgpdb->GetCostModelParams())
@@ -2892,7 +2887,6 @@ CCostModelGPDB::Cost(
 		}
 
 		case COperator::EopPhysicalSerialUnionAll:
-		case COperator::EopPhysicalParallelUnionAll:
 		{
 			return CostUnionAll(m_mp, exprhdl, this, pci);
 		}

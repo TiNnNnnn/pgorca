@@ -2314,10 +2314,7 @@ CCostModelPG::CostUnionAll(CMemoryPool *,  // mp
 						   CExpressionHandle &exprhdl,
 						   const SCostingInfo *pci)
 {
-	GPOS_ASSERT(COperator::EopPhysicalSerialUnionAll ==
-					exprhdl.Pop()->Eopid() ||
-				COperator::EopPhysicalParallelUnionAll ==
-					exprhdl.Pop()->Eopid());
+	GPOS_ASSERT(COperator::EopPhysicalSerialUnionAll == exprhdl.Pop()->Eopid());
 	(void) exprhdl;
 	constexpr DOUBLE kAppendCpuCostMultiplier = 0.5;
 	return CCost(kAppendCpuCostMultiplier * cpu_tuple_cost * pci->Rows());
@@ -3140,7 +3137,6 @@ CCostModelPG::Cost(CExpressionHandle &exprhdl, const SCostingInfo *pci) const
 			break;
 
 		case COperator::EopPhysicalSerialUnionAll:
-		case COperator::EopPhysicalParallelUnionAll:
 			local = CostUnionAll(m_mp, exprhdl, pci);
 			break;
 

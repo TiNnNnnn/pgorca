@@ -74,7 +74,6 @@ static bool force_expanded_dist_aggs = false;
 static bool push_reqs_cte            = true;
 static bool prune_computed_cols      = true;
 static bool force_3stage_scalar_dqa  = false;
-static bool parallel_union           = false;
 static bool array_constraints        = true;
 static bool force_agg_skew_avoidance = false;
 static bool force_split_window_func  = false;
@@ -261,9 +260,6 @@ CConfigParamMapping::SConfigMappingElem CConfigParamMapping::m_elements[] = {
 
 	{EopttraceForceThreeStageScalarDQA, &force_3stage_scalar_dqa,
 	 false, GPOS_WSZ_LIT("Force 3-stage aggregate plan for scalar distinct qualified aggregate.")},
-
-	{EopttraceEnableParallelAppend, &parallel_union,
-	 false, GPOS_WSZ_LIT("Enable parallel execution for UNION/UNION ALL queries.")},
 
 	{EopttraceArrayConstraints, &array_constraints,
 	 false, GPOS_WSZ_LIT("Allow array constraints in the optimizer.")},
