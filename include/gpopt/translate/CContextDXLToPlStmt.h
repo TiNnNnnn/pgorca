@@ -120,9 +120,6 @@ private:
 	// GetCTEPlanInfo (Consumer)
 	HMUlCTEPlanInfo *m_cte_plan_info;
 
-	// CTAS distribution policy
-	GpPolicy *m_distribution_policy;
-
 	UlongToUlongMap *m_part_selector_to_param_map;
 
 	// scan_id → PARAM_EXEC id for HashJoin DPE (DTS and PS on different join sides)
@@ -236,16 +233,6 @@ public:
 	SetCurrentSlice(PlanSlice *slice)
 	{
 		m_current_slice = slice;
-	}
-
-	// add CTAS information
-	void AddCtasInfo(GpPolicy *distribution_policy);
-
-	// CTAS distribution policy
-	GpPolicy *
-	GetDistributionPolicy() const
-	{
-		return m_distribution_policy;
 	}
 
 	// Get the hash opclass or hash function for given datatype,

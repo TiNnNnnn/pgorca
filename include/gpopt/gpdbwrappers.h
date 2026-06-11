@@ -32,7 +32,6 @@ extern "C" {
 }
 
 // Stub types replacing Cloudberry-specific definitions
-#include "catalog/gp_distribution_policy.h"  // from compat/
 #include "utils/compat_memset.h"              // from compat/
 #include "utils/misc.h"                       // from compat/
 
@@ -61,7 +60,6 @@ using StringInfo = StringInfoData *;
 struct LogicalIndexes;
 struct ParseState;
 struct DefElem;
-struct GpPolicy;
 struct PartitionSelector;
 struct Motion;
 struct Var;
@@ -532,10 +530,6 @@ Node *MutateQueryOrExpressionTree(Node *node, Node *(*mutator)(Node *, void *), 
 // check whether a relation is inherited
 bool HasSubclassSlow(Oid rel_oid);
 
-// return the distribution policy of a relation; if the table is partitioned
-// and the parts are distributed differently, return Random distribution
-GpPolicy *GetDistributionPolicy(Relation rel);
-
 // return true if the table is partitioned and hash-distributed, and one of
 // the child partitions is randomly distributed
 gpos::BOOL IsChildPartDistributionMismatched(Relation rel);
@@ -692,9 +686,6 @@ bool IsAbortRequested(void);
 
 // Given the type OID, get the typelem (InvalidOid if not an array type).
 Oid GetElementType(Oid array_type_oid);
-
-GpPolicy *MakeGpPolicy(GpPolicyType ptype, int nattrs, int numsegments);
-
 
 uint32 HashChar(Datum d);
 

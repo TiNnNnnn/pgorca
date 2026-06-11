@@ -24,7 +24,6 @@ extern "C" {
 #include "postgres.h"
 
 #include "access/tupdesc.h"
-#include "catalog/gp_distribution_policy.h"
 #include "foreign/foreign.h"
 }
 
@@ -225,11 +224,6 @@ private:
 											  CMDAccessor *md_accessor,
 											  Relation rel);
 
-	// get the distribution columns
-	static ULongPtrArray *RetrieveRelDistributionCols(
-		CMemoryPool *mp, GpPolicy *gp_policy, CMDColumnArray *mdcol_array,
-		ULONG size);
-
 	// construct a mapping GPDB attnos -> position in the column array
 	static ULONG *ConstructAttnoMapping(CMemoryPool *mp,
 										CMDColumnArray *mdcol_array,
@@ -267,9 +261,6 @@ private:
 	// retrieve the opfamilies mdids for the given index
 	static IMdIdArray *RetrieveIndexOpFamilies(CMemoryPool *mp,
 											   IMDId *mdid_index);
-
-	static IMdIdArray *RetrieveRelDistributionOpFamilies(CMemoryPool *mp,
-														 GpPolicy *policy);
 
 	// generate statistics for the system level columns
 	static CDXLColStats *GenerateStatsForSystemCols(
@@ -331,9 +322,6 @@ public:
 
 	// translate GPDB comparison type
 	static IMDType::ECmpType ParseCmpType(ULONG cmpt);
-
-	// get the distribution policy of the relation
-	static IMDRelation::Ereldistrpolicy GetRelDistribution(GpPolicy *gp_policy);
 
 	static IMDRelation::Ereldistrpolicy
 	GetDistributionFromForeignRelExecLocation(ForeignTable *ft);

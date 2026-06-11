@@ -203,10 +203,9 @@ test/test.sh --pg-tests --ignore-plans
 
 ### MPP Stubs
 
-Cloudberry's translation layer references many MPP-only types (`Motion`, `PlanSlice`, `GpPolicy`, `DynamicSeqScan`, etc.). These are stubbed in `compat/cdb/cdb_plan_nodes.h` so the code compiles. ORCA will never generate these nodes in single-node mode.
+Cloudberry's translation layer references many MPP-only types (`Motion`, `PlanSlice`, `DynamicSeqScan`, etc.). These are stubbed in `compat/cdb/cdb_plan_nodes.h` so the code compiles. ORCA will never generate these nodes in single-node mode.
 
 ### GPDB GUCs
 
 Many ORCA configuration knobs were GPDB-specific GUCs. They are re-defined as real GUCs in `pg_orca.cpp` under the `optimizer.*` prefix, so existing ORCA code referencing them continues to work.
-
 

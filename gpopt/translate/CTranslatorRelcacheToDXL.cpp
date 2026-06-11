@@ -560,29 +560,14 @@ CTranslatorRelcacheToDXL::RetrieveRel(CMemoryPool *mp, CMDAccessor *md_accessor,
 		GPDXL_SYSTEM_COLUMNS + (ULONG) rel->rd_att->natts + 1;
 	ULONG *attno_mapping = ConstructAttnoMapping(mp, mdcol_array, max_cols);
 
-	// get distribution policy
-	GpPolicy *gp_policy = gpdb::GetDistributionPolicy(rel.get());
-	// If it's a foreign table, but not an external table
-	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE && gp_policy == nullptr)
+	if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
 	{
-		// for foreign tables, we need to convert from the foreign table's execution location,
-		// to an Orca distribution spec. We do this mapping in `GetDistributionFromForeignRelExecLocation`.
-		// the distribution here represents the execution location of the fdw, which is
-		// then mapped to Orca's distribution spec
 		ForeignTable *ft = GetForeignTable(rel->rd_id);
 		dist = GetDistributionFromForeignRelExecLocation(ft);
 	}
 	else
 	{
-		dist = GetRelDistribution(gp_policy);
-	}
-
-	// get distribution columns
-	if (IMDRelation::EreldistrHash == dist)
-	{
-		distr_cols =
-			RetrieveRelDistributionCols(mp, gp_policy, mdcol_array, max_cols);
-		distr_op_families = RetrieveRelDistributionOpFamilies(mp, gp_policy);
+		dist = IMDRelation::EreldistrMasterOnly;
 	}
 
 	convert_hash_to_random = gpdb::IsChildPartDistributionMismatched(rel.get());
@@ -803,67 +788,6 @@ CTranslatorRelcacheToDXL::RetrieveRelColumns(CMemoryPool *mp,
 	return mdcol_array;
 }
 
-//---------------------------------------------------------------------------
-//	@function:
-//		CTranslatorRelcacheToDXL::GetRelDistribution
-//
-//	@doc:
-//		Return the distribution policy of the relation
-//
-//---------------------------------------------------------------------------
-IMDRelation::Ereldistrpolicy
-CTranslatorRelcacheToDXL::GetRelDistribution(GpPolicy *gp_policy)
-{
-	if (nullptr == gp_policy)
-	{
-		return IMDRelation::EreldistrMasterOnly;
-	}
-
-	if (POLICYTYPE_REPLICATED == gp_policy->ptype)
-	{
-		return IMDRelation::EreldistrReplicated;
-	}
-
-	if (POLICYTYPE_PARTITIONED == gp_policy->ptype)
-	{
-		if (0 == gp_policy->nattrs)
-		{
-			return IMDRelation::EreldistrRandom;
-		}
-
-		return IMDRelation::EreldistrHash;
-	}
-
-	if (POLICYTYPE_ENTRY == gp_policy->ptype)
-	{
-		return IMDRelation::EreldistrMasterOnly;
-	}
-
-	GPOS_RAISE(gpdxl::ExmaMD, ExmiDXLUnrecognizedType,
-			   GPOS_WSZ_LIT("unrecognized distribution policy"));
-	return IMDRelation::EreldistrSentinel;
-}
-
-// Foreign relations don't store their distribution policy in GpPolicy,
-// so we need to extract it separately from the ForeignTable itself.
-// maps foreign table's execution location to Orca distribution policy
-// FTEXECLOCATION_COORDINATOR: maps to a coordinator-only distribution. That is,
-// this table must be executed on the coordinator
-//
-// FTEXECLOCATION_ANY: maps to a universal distribution. This is still a
-// foreign table that exists in a single location, but can be accessed/executed
-// from either the coordinator, a single segment, or even multiple segments
-// depending on costing. However, in the case of multiple segments, the overall
-// distribution spec still expects only a single copy of the data. This can be
-// achieved by joining with a distribted table on the hash key for example. The
-// "ANY" execution location (and universal distribution spec) is treated
-// identically to a "generate_series" function. This is similar to a replicated
-// spec, it can also be executed on the coordinator.
-//
-// FTEXECLOCATION_ALL_SEGMENTS: maps to a random distribution. "ALL SEGMENTS"
-// indicates that each segment is getting a separate subset of the data, most
-// likely from a distributed source. There is no assumption about the
-// distribution of this data, so we must assume it is randomly distributed.
 IMDRelation::Ereldistrpolicy
 CTranslatorRelcacheToDXL::GetDistributionFromForeignRelExecLocation(
 	ForeignTable *ft)
@@ -874,61 +798,6 @@ CTranslatorRelcacheToDXL::GetDistributionFromForeignRelExecLocation(
 	return IMDRelation::EreldistrUniversal;
 }
 
-
-//---------------------------------------------------------------------------
-//	@function:
-//		CTranslatorRelcacheToDXL::RetrieveRelDistributionCols
-//
-//	@doc:
-//		Get distribution columns
-//
-//---------------------------------------------------------------------------
-ULongPtrArray *
-CTranslatorRelcacheToDXL::RetrieveRelDistributionCols(
-	CMemoryPool *mp, GpPolicy *gp_policy, CMDColumnArray *mdcol_array,
-	ULONG size)
-{
-	ULONG *attno_mapping = GPOS_NEW_ARRAY(mp, ULONG, size);
-
-	for (ULONG ul = 0; ul < mdcol_array->Size(); ul++)
-	{
-		const IMDColumn *md_col = (*mdcol_array)[ul];
-		INT attno = md_col->AttrNum();
-
-		ULONG idx = (ULONG)(GPDXL_SYSTEM_COLUMNS + attno);
-		attno_mapping[idx] = ul;
-	}
-
-	ULongPtrArray *distr_cols = GPOS_NEW(mp) ULongPtrArray(mp);
-
-	for (ULONG ul = 0; ul < (ULONG) gp_policy->nattrs; ul++)
-	{
-		AttrNumber attno = gp_policy->attrs[ul];
-
-		distr_cols->Append(
-			GPOS_NEW(mp) ULONG(GetAttributePosition(attno, attno_mapping)));
-	}
-
-	GPOS_DELETE_ARRAY(attno_mapping);
-	return distr_cols;
-}
-
-IMdIdArray *
-CTranslatorRelcacheToDXL::RetrieveRelDistributionOpFamilies(CMemoryPool *mp,
-															GpPolicy *gp_policy)
-{
-	IMdIdArray *distr_op_classes = GPOS_NEW(mp) IMdIdArray(mp);
-
-	Oid *opclasses = gp_policy->opclasses;
-	for (ULONG ul = 0; ul < (ULONG) gp_policy->nattrs; ul++)
-	{
-		Oid opfamily = gpdb::GetOpclassFamily(opclasses[ul]);
-		distr_op_classes->Append(GPOS_NEW(mp)
-									 CMDIdGPDB(IMDId::EmdidGeneral, opfamily));
-	}
-
-	return distr_op_classes;
-}
 
 //---------------------------------------------------------------------------
 //	@function:

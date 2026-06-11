@@ -56,7 +56,6 @@ CContextDXLToPlStmt::CContextDXLToPlStmt(
 	  m_subplan_sliceids_list(nullptr),
 	  m_slices_list(nullptr),
 	  m_result_relation_index(0),
-	  m_distribution_policy(nullptr),
 	  m_part_selector_to_param_map(nullptr),
 	  m_scan_id_to_param_map(nullptr),
 	  m_agg_infos(nullptr),
@@ -351,22 +350,6 @@ CContextDXLToPlStmt::AddSlice(PlanSlice *slice)
 	m_slices_list = gpdb::LAppend(m_slices_list, slice);
 
 	return slice->sliceIndex;
-}
-
-//---------------------------------------------------------------------------
-//	@function:
-//		CContextDXLToPlStmt::AddCtasInfo
-//
-//	@doc:
-//		Add CTAS info
-//
-//---------------------------------------------------------------------------
-void
-CContextDXLToPlStmt::AddCtasInfo(GpPolicy *distribution_policy)
-{
-	GPOS_ASSERT(nullptr != distribution_policy);
-
-	m_distribution_policy = distribution_policy;
 }
 
 //---------------------------------------------------------------------------

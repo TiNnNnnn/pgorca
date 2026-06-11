@@ -19,7 +19,6 @@ extern "C" {
 
 #include "access/attmap.h"
 #include "access/sysattr.h"
-#include "catalog/gp_distribution_policy.h"
 #include "catalog/pg_collation.h"
 /* cdb/cdbutil.h not present in PG18 — using compat stubs */
 #include "cdb/cdb_plan_nodes.h"
@@ -360,8 +359,6 @@ CTranslatorDXLToPlStmt::GetPlannedStmtFromDXL(const CDXLNode *dxlnode,
 #endif
 	/* intoPolicy / slices / numSlices / subplan_sliceIds are GPDB MPP-only
 	 * fields absent from PG18's PlannedStmt — ignored in single-node mode. */
-	(void) m_dxl_to_plstmt_context->GetDistributionPolicy();
-
 	planned_stmt->paramExecTypes = m_dxl_to_plstmt_context->GetParamTypes();
 	/* Side-channel: record slices for reference, not attached to planned_stmt */
 	int _numSlices = 0;
@@ -5624,55 +5621,21 @@ CTranslatorDXLToPlStmt::GetDXLDatumGPDBHash(CDXLDatumArray *dxl_datum_array,
 
 	const ULONG length = dxl_datum_array->Size();
 
-	if (pRTEHashFuncCal != nullptr)
+	// Single-node PG18: tables have no MPP distribution key,
+	// so always derive hash functions from the Const types.
+	(void) pRTEHashFuncCal;
+	hashfuncs = (Oid *) gpdb::GPDBAlloc(length * sizeof(Oid));
+	for (ULONG ul = 0; ul < length; ul++)
 	{
-		// If we have one unique RTE in FROM clause,
-		// then we do direct dispatch based on the distribution policy
+		CDXLDatum *datum_dxl = (*dxl_datum_array)[ul];
 
-		gpdb::RelationWrapper rel = gpdb::GetRelation(pRTEHashFuncCal->relid);
-		GPOS_ASSERT(rel);
-		GpPolicy *policy = nullptr; /* rd_cdbpolicy is GPDB-only */
-		int policy_nattrs = policy->nattrs;
-		TupleDesc desc = rel->rd_att;
-		Oid *opclasses = policy->opclasses;
-		hashfuncs = (Oid *) gpdb::GPDBAlloc(policy_nattrs * sizeof(Oid));
-
-		for (int i = 0; i < policy_nattrs; i++)
-		{
-			AttrNumber attnum = policy->attrs[i];
-			Oid typeoid = TupleDescAttr(desc, attnum - 1)->atttypid;
-			Oid opfamily;
-
-			opfamily = gpdb::GetOpclassFamily(opclasses[i]);
-			hashfuncs[i] = gpdb::GetHashProcInOpfamily(opfamily, typeoid);
-		}
-		for (ULONG ul = 0; ul < length; ul++)
-		{
-			CDXLDatum *datum_dxl = (*dxl_datum_array)[ul];
-			Const *const_expr =
-				(Const *) m_translator_dxl_to_scalar->TranslateDXLDatumToScalar(
-					datum_dxl);
-			consts_list = gpdb::LAppend(consts_list, const_expr);
-		}
-	}
-	else
-	{
-		// If we have multiple tables in the "from" clause,
-		// we calculate hashfunction based on the consttype
-
-		hashfuncs = (Oid *) gpdb::GPDBAlloc(length * sizeof(Oid));
-		for (ULONG ul = 0; ul < length; ul++)
-		{
-			CDXLDatum *datum_dxl = (*dxl_datum_array)[ul];
-
-			Const *const_expr =
-				(Const *) m_translator_dxl_to_scalar->TranslateDXLDatumToScalar(
-					datum_dxl);
-			consts_list = gpdb::LAppend(consts_list, const_expr);
-			hashfuncs[ul] =
-				m_dxl_to_plstmt_context->GetDistributionHashFuncForType(
-					const_expr->consttype);
-		}
+		Const *const_expr =
+			(Const *) m_translator_dxl_to_scalar->TranslateDXLDatumToScalar(
+				datum_dxl);
+		consts_list = gpdb::LAppend(consts_list, const_expr);
+		hashfuncs[ul] =
+			m_dxl_to_plstmt_context->GetDistributionHashFuncForType(
+				const_expr->consttype);
 	}
 
 	ULONG hash =
@@ -6962,13 +6925,6 @@ CTranslatorDXLToPlStmt::TranslateDXLCtas(
 	// translate operator costs
 	TranslatePlanCosts(ctas_dxlnode, plan);
 
-	GpPolicy *distr_policy =
-		TranslateDXLPhyCtasToDistrPolicy(phy_ctas_dxlop, target_list);
-	m_dxl_to_plstmt_context->AddCtasInfo(distr_policy);
-
-	GPOS_ASSERT(IMDRelation::EreldistrMasterOnly !=
-				phy_ctas_dxlop->Ereldistrpolicy());
-
 	m_is_tgt_tbl_distributed = true;
 
 	// Add a result node on top with the correct projection list
@@ -6983,66 +6939,6 @@ CTranslatorDXLToPlStmt::TranslateDXLCtas(
 	plan = (Plan *) result;
 
 	return (Plan *) plan;
-}
-
-//---------------------------------------------------------------------------
-//	@function:
-//		CTranslatorDXLToPlStmt::TranslateDXLPhyCtasToDistrPolicy
-//
-//	@doc:
-//		Translates distribution policy given by a physical CTAS operator
-//
-//---------------------------------------------------------------------------
-GpPolicy *
-CTranslatorDXLToPlStmt::TranslateDXLPhyCtasToDistrPolicy(
-	const CDXLPhysicalCTAS *dxlop, List * /*target_list*/)
-{
-	ULongPtrArray *distr_col_pos_array = dxlop->GetDistrColPosArray();
-
-	const ULONG num_of_distr_cols =
-		(distr_col_pos_array == nullptr) ? 0 : distr_col_pos_array->Size();
-
-	ULONG num_of_distr_cols_alloc = 1;
-	if (0 < num_of_distr_cols)
-	{
-		num_of_distr_cols_alloc = num_of_distr_cols;
-	}
-
-	// always set numsegments to ALL for CTAS
-	GpPolicy *distr_policy =
-		gpdb::MakeGpPolicy(POLICYTYPE_PARTITIONED, num_of_distr_cols_alloc,
-						   gpdb::GetGPSegmentCount());
-
-	GPOS_ASSERT(IMDRelation::EreldistrHash == dxlop->Ereldistrpolicy() ||
-				IMDRelation::EreldistrRandom == dxlop->Ereldistrpolicy() ||
-				IMDRelation::EreldistrReplicated == dxlop->Ereldistrpolicy());
-
-	if (IMDRelation::EreldistrReplicated == dxlop->Ereldistrpolicy())
-	{
-		distr_policy->ptype = POLICYTYPE_REPLICATED;
-	}
-	else
-	{
-		distr_policy->ptype = POLICYTYPE_PARTITIONED;
-	}
-
-	distr_policy->nattrs = 0;
-	if (IMDRelation::EreldistrHash == dxlop->Ereldistrpolicy())
-	{
-		GPOS_ASSERT(0 < num_of_distr_cols);
-		distr_policy->nattrs = num_of_distr_cols;
-		IMdIdArray *opclasses = dxlop->GetDistrOpclasses();
-		GPOS_ASSERT(opclasses->Size() == num_of_distr_cols);
-		for (ULONG ul = 0; ul < num_of_distr_cols; ul++)
-		{
-			ULONG col_pos_idx = *((*distr_col_pos_array)[ul]);
-			distr_policy->attrs[ul] = col_pos_idx + 1;
-
-			Oid opclass = CMDIdGPDB::CastMdid((*opclasses)[ul])->Oid();
-			distr_policy->opclasses[ul] = opclass;
-		}
-	}
-	return distr_policy;
 }
 
 //---------------------------------------------------------------------------

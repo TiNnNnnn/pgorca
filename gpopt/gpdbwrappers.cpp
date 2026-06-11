@@ -2270,20 +2270,6 @@ gpdb::HasSubclassSlow(Oid rel_oid)
 	return false;
 }
 
-GpPolicy *
-gpdb::GetDistributionPolicy(Relation rel)
-{
-	GP_WRAP_START;
-	{
-		/* PG18: all tables are single-node (POLICYTYPE_ENTRY) */
-		if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-			return nullptr;
-		return GpPolicyFetch(rel->rd_id);
-	}
-	GP_WRAP_END;
-	return nullptr;
-}
-
 gpos::BOOL
 gpdb::IsChildPartDistributionMismatched(Relation rel)
 {
@@ -3036,19 +3022,6 @@ gpdb::GetElementType(Oid array_type_oid)
 	GP_WRAP_START;
 	{
 		return get_element_type(array_type_oid);
-	}
-	GP_WRAP_END;
-}
-
-GpPolicy *
-gpdb::MakeGpPolicy(GpPolicyType ptype, int nattrs, int numsegments)
-{
-	GP_WRAP_START;
-	{
-		/*
-		 * FIXME_TABLE_EXPAND: it used by ORCA, help...
-		 */
-		return makeGpPolicy(ptype, nattrs, numsegments);
 	}
 	GP_WRAP_END;
 }

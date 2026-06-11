@@ -616,10 +616,6 @@ private:
 	// sets the vartypmod fields in the target entries of the given target list
 	static void SetVarTypMod(const CDXLPhysicalCTAS *dxlop, List *target_list);
 
-	// translate the distribution policy for a DXL physical CTAS operator
-	static GpPolicy *TranslateDXLPhyCtasToDistrPolicy(
-		const CDXLPhysicalCTAS *dxlop, List *target_list);
-
 	// translate CTAS storage options
 	static List *TranslateDXLCtasStorageOptions(
 		gpdxl::CDXLCtasStorageOptions::CDXLCtasOptionArray
