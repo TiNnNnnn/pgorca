@@ -92,6 +92,10 @@ private:
 	// pg_class.relpages for the index (0 if unknown)
 	ULONG m_index_pages;
 
+	// btree fast-root level from _bt_getrootheight (-1 if unknown or AM has
+	// no amgettreeheight). Matches PG IndexOptInfo::tree_height.
+	INT m_tree_height;
+
 public:
 	CMDIndexGPDB(const CMDIndexGPDB &) = delete;
 
@@ -106,7 +110,7 @@ public:
 				 IMdIdArray *mdid_opfamilies_array,
 				 IMdIdArray *child_index_oids, ULongPtrArray *sort_direction,
 				 ULongPtrArray *nulls_direction,
-				 ULONG index_pages);
+				 ULONG index_pages, INT tree_height);
 
 	// dtor
 	~CMDIndexGPDB() override;
@@ -134,6 +138,13 @@ public:
 	IndexPages() const override
 	{
 		return m_index_pages;
+	}
+
+	// btree fast-root level (-1 if unknown)
+	INT
+	TreeHeight() const override
+	{
+		return m_tree_height;
 	}
 
 	// index type

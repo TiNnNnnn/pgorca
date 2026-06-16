@@ -1026,12 +1026,21 @@ CTranslatorRelcacheToDXL::RetrieveIndex(CMemoryPool *mp,
 	const ULONG index_relpages =
 		static_cast<ULONG>(index_rel->rd_rel->relpages);
 
+	// btree fast-root level (matches PG plancat.c get_relation_info path):
+	// only btree provides amgettreeheight today; partitioned indexes have no
+	// backing storage so leave it unknown.
+	INT tree_height = -1;
+	if (!index_partitioned && nullptr != am_routine->amgettreeheight)
+	{
+		tree_height = am_routine->amgettreeheight(index_rel.get());
+	}
+
 	CMDIndexGPDB *index = GPOS_NEW(mp) CMDIndexGPDB(
 		mp, mdid_index, mdname, index_clustered, index_partitioned,
 		index_amcanorder, index_amcanorderbyop, index_type, mdid_item_type,
 		index_key_cols_array, included_cols, returnable_cols,
 		op_families_mdids, child_index_oids, sort_direction, nulls_direction,
-		index_relpages);
+		index_relpages, tree_height);
 
 	GPOS_DELETE_ARRAY(attno_mapping);
 	return index;

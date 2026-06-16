@@ -1767,10 +1767,12 @@ CCostModelPG::CostIndexScan(CMemoryPool *mp,
 	}
 	BOOL leading_key_used = true;  // assume covered if no index metadata
 	BOOL is_btree = true;  // descent_cost only applies to btree AMs
+	INT tree_height_from_md = -1;
 	if (nullptr != index_mdid)
 	{
 		const IMDIndex *index = mda->RetrieveIndex(index_mdid);
 		is_btree = (IMDIndex::EmdindBtree == index->IndexType());
+		tree_height_from_md = index->TreeHeight();
 		if (index->Keys() > 0)
 		{
 			// IMDIndex::KeyAt(0) is the 0-based POSITION of the leading
@@ -1932,15 +1934,18 @@ CCostModelPG::CostIndexScan(CMemoryPool *mp,
 	// charge a btree-style log2(...)+(h+1)*50 descent.  Zero this term out
 	// for non-btree AMs to stay aligned with hash/gist/bitmap costestimate.
 	constexpr DOUBLE kPageCpuMultiplier = 50.0;
-	// tree_height: any btree with > 1 page has root + leaves (height >= 1).
-	// PG's fallback floor(log_100(pages)) only applies before the metapage
-	// is read; once read, _bt_getrootheight returns >= 1.  Floor at 1 to
-	// match the cached real value.
+	// tree_height: prefer the real value populated from amgettreeheight
+	// (PG IndexOptInfo::tree_height / _bt_getrootheight).  Fall back to
+	// floor(log_100(index_pages)) when the metadata layer didn't carry it
+	// — same fallback PG itself uses in selfuncs.c:7886 before the metapage
+	// has been read.
 	const DOUBLE tree_height =
-		(index_pages > 1.0)
-			? std::max(1.0,
-					   std::floor(std::log(index_pages) / std::log(100.0)))
-			: 0.0;
+		(tree_height_from_md >= 0)
+			? static_cast<DOUBLE>(tree_height_from_md)
+			: ((index_pages > 1.0)
+				   ? std::max(1.0,
+							  std::floor(std::log(index_pages) / std::log(100.0)))
+				   : 0.0);
 	const DOUBLE descent_cost =
 		is_btree
 			? (std::ceil(std::log2(std::max(N, 1.0))) +
@@ -2285,12 +2290,35 @@ CCostModelPG::CostLimit(CMemoryPool *,	// mp
 			// tuples; for selective scans subpath_rows is small and
 			// log2(small) ≈ 0, which still leaves the (tree_height+1)×50
 			// constant — close enough across the relevant size range.
+			IMDId *idx_mdid = nullptr;
+			if (COperator::EopPhysicalIndexScan == op)
+			{
+				idx_mdid = CPhysicalIndexScan::PopConvert(child_op)
+							   ->Pindexdesc()
+							   ->MDId();
+			}
+			else if (COperator::EopPhysicalIndexOnlyScan == op)
+			{
+				idx_mdid = CPhysicalIndexOnlyScan::PopConvert(child_op)
+							   ->Pindexdesc()
+							   ->MDId();
+			}
+			DOUBLE tree_height = 1.0;  // legacy fallback when md unavailable
+			if (nullptr != idx_mdid)
+			{
+				CMDAccessor *mda = COptCtxt::PoctxtFromTLS()->Pmda();
+				const IMDIndex *index = mda->RetrieveIndex(idx_mdid);
+				const INT h = index->TreeHeight();
+				if (h >= 0)
+				{
+					tree_height = static_cast<DOUBLE>(h);
+				}
+			}
 			const DOUBLE log_n = std::log2(std::max(input_rows, 2.0));
-			constexpr DOUBLE kTreeHeight = 1.0;
 			constexpr DOUBLE kPageCpuMultiplier = 50.0;
 			const DOUBLE startup_approx =
 				(std::ceil(log_n) +
-				 (kTreeHeight + 1.0) * kPageCpuMultiplier) *
+				 (tree_height + 1.0) * kPageCpuMultiplier) *
 				cpu_operator_cost;
 			run = std::max(0.0, subpath_total - startup_approx);
 		}
@@ -2416,6 +2444,7 @@ CCostModelPG::CostBitmapTableScan(CMemoryPool *,  // mp
 	DOUBLE num_sa_scans = 1.0;
 	ULONG num_index_probes = 0;
 	BOOL all_probes_btree = true;
+	INT tree_height_max = -1;	// max real tree_height across probes, -1 unknown
 	{
 		CMDAccessor *mda_b = COptCtxt::PoctxtFromTLS()->Pmda();
 		std::function<void(CExpression *)> walk = [&](CExpression *e) {
@@ -2434,6 +2463,8 @@ CCostModelPG::CostBitmapTableScan(CMemoryPool *,  // mp
 				{
 					all_probes_btree = false;
 				}
+				const INT h = index->TreeHeight();
+				if (h > tree_height_max) tree_height_max = h;
 				if (e->Arity() > 0 && num_index_probes == 1)
 				{
 					num_sa_scans = static_cast<DOUBLE>(
@@ -2457,17 +2488,16 @@ CCostModelPG::CostBitmapTableScan(CMemoryPool *,  // mp
 			: std::max(1.0, std::ceil(N * kIndexEntrySize / static_cast<DOUBLE>(BLCKSZ)));
 	// Btree descent matches CostIndexScan (PG btcostestimate); see the
 	// detailed comment block there.  Use index->tuples ≈ N (not table
-	// pages) for log2(...), and approximate tree_height as log_100(index_pages).
+	// pages) for log2(...), and tree_height from the real metapage when
+	// available — fall back to floor(log_100(index_pages)).
 	constexpr DOUBLE kPageCpuMultiplier = 50.0;
-	// tree_height: any btree with > 1 page has root + leaves (height >= 1).
-	// PG's fallback floor(log_100(pages)) only applies before the metapage
-	// is read; once read, _bt_getrootheight returns >= 1.  Floor at 1 to
-	// match the cached real value.
 	const DOUBLE tree_height =
-		(index_pages > 1.0)
-			? std::max(1.0,
-					   std::floor(std::log(index_pages) / std::log(100.0)))
-			: 0.0;
+		(tree_height_max >= 0)
+			? static_cast<DOUBLE>(tree_height_max)
+			: ((index_pages > 1.0)
+				   ? std::max(1.0,
+							  std::floor(std::log(index_pages) / std::log(100.0)))
+				   : 0.0);
 	// Hash/gist/bitmap AMs don't pay the btree-style descent (matches
 	// CostIndexScan / 9feb33d): PG hashcostestimate / gistcostestimate
 	// return indexTotalCost without a log_2(tuples) + (h+1)×50 term.

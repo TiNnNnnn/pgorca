@@ -597,6 +597,7 @@ CDXLTokens::Init(CMemoryPool *mp)
 		{EdxltokenIndexReturnableCols, GPOS_WSZ_LIT("ReturnableColumns")},
 		{EdxltokenIndexClustered, GPOS_WSZ_LIT("IsClustered")},
 		{EdxltokenIndexPages, GPOS_WSZ_LIT("IndexPages")},
+		{EdxltokenIndexTreeHeight, GPOS_WSZ_LIT("IndexTreeHeight")},
 		{EdxltokenIndexAmCanOrder, GPOS_WSZ_LIT("AmCanOrder")},
 		{EdxltokenIndexAmCanOrderByOp, GPOS_WSZ_LIT("AmCanOrderByOp")},
 		{EdxltokenIndexPartial, GPOS_WSZ_LIT("IsPartial")},

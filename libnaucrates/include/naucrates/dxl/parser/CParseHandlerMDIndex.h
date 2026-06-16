@@ -76,6 +76,9 @@ private:
 	// pg_class.relpages for the index (0 if absent in DXL)
 	ULONG m_index_pages;
 
+	// btree fast-root level (-1 if absent in DXL)
+	INT m_tree_height;
+
 	// child index oids parse handler
 	CParseHandlerBase *m_child_indexes_parse_handler;
 

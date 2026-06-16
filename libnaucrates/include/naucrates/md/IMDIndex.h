@@ -76,6 +76,10 @@ public:
 	// pg_class.relpages for the index relation (0 if unknown)
 	virtual ULONG IndexPages() const = 0;
 
+	// btree fast-root level (matches PG IndexOptInfo::tree_height /
+	// _bt_getrootheight); -1 if unknown or AM has no amgettreeheight.
+	virtual INT TreeHeight() const = 0;
+
 	// number of keys
 	virtual ULONG Keys() const = 0;
 

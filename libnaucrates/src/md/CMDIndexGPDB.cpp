@@ -39,7 +39,7 @@ CMDIndexGPDB::CMDIndexGPDB(
 	ULongPtrArray *included_cols_array, ULongPtrArray *returnable_cols_array,
 	IMdIdArray *mdid_opfamilies_array, IMdIdArray *child_index_oids,
 	ULongPtrArray *sort_direction, ULongPtrArray *nulls_direction,
-	ULONG index_pages)
+	ULONG index_pages, INT tree_height)
 
 	: m_mp(mp),
 	  m_mdid(mdid),
@@ -57,7 +57,8 @@ CMDIndexGPDB::CMDIndexGPDB(
 	  m_child_index_oids(child_index_oids),
 	  m_sort_direction(sort_direction),
 	  m_nulls_direction(nulls_direction),
-	  m_index_pages(index_pages)
+	  m_index_pages(index_pages),
+	  m_tree_height(tree_height)
 {
 	GPOS_ASSERT(mdid->IsValid());
 	GPOS_ASSERT(IMDIndex::EmdindSentinel > index_type);
@@ -404,6 +405,8 @@ CMDIndexGPDB::Serialize(CXMLSerializer *xml_serializer) const
 	xml_serializer->AddAttribute(
 		CDXLTokens::GetDXLTokenStr(EdxltokenIndexPages),
 		static_cast<ULONG>(m_index_pages));
+	xml_serializer->AddAttribute(
+		CDXLTokens::GetDXLTokenStr(EdxltokenIndexTreeHeight), m_tree_height);
 
 	xml_serializer->AddAttribute(
 		CDXLTokens::GetDXLTokenStr(EdxltokenIndexAmCanOrder), m_amcanorder);

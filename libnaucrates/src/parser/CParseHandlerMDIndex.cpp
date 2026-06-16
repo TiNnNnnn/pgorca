@@ -48,6 +48,7 @@ CParseHandlerMDIndex::CParseHandlerMDIndex(
 	  m_sort_direction(nullptr),
 	  m_nulls_direction(nullptr),
 	  m_index_pages(0),
+	  m_tree_height(-1),
 	  m_child_indexes_parse_handler(nullptr)
 {
 }
@@ -126,6 +127,12 @@ CParseHandlerMDIndex::StartElement(const XMLCh *const element_uri,
 				EdxltokenIndexPages, EdxltokenIndex);
 		}
 	}
+
+	// btree fast-root level; absent in older DXL → -1 (unknown)
+	m_tree_height = CDXLOperatorFactory::ExtractConvertAttrValueToInt(
+		m_parse_handler_mgr->GetDXLMemoryManager(), attrs,
+		EdxltokenIndexTreeHeight, EdxltokenIndex,
+		true /* is_optional */, -1 /* default_val */);
 
 	// parse index access method ordering
 	m_amcanorder = CDXLOperatorFactory::ExtractConvertAttrValueToBool(
@@ -246,7 +253,8 @@ CParseHandlerMDIndex::EndElement(const XMLCh *const,  // element_uri,
 		m_mp, m_mdid, m_mdname, m_clustered, is_partitioned, m_amcanorder,
 		m_amcanorderbyop, m_index_type, m_mdid_item_type, m_index_key_cols_array,
 		m_included_cols_array, m_returnable_cols_array, mdid_opfamilies_array,
-		child_indexes, m_sort_direction, m_nulls_direction, m_index_pages);
+		child_indexes, m_sort_direction, m_nulls_direction, m_index_pages,
+		m_tree_height);
 
 	// deactivate handler
 	m_parse_handler_mgr->DeactivateHandler();
