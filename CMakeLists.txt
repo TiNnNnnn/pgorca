@@ -53,52 +53,106 @@ message(STATUS "  server headers: ${PG_SERVER_INCLUDEDIR}")
 message(STATUS "  pkglibdir:      ${PG_PKGLIBDIR}")
 
 # -------------------------------------------------------------------
-# xerces-c (needed by ORCA for DXL XML parsing)
-# Prefer pkg-config (works on Linux and Homebrew macOS); fall back to
-# manual find_library + find_path for installations without .pc files.
+# xerces-c (needed by ORCA for DXL XML parsing).
+#
+# Default on Linux: build the bundled submodule under third_party/xerces-c
+# as a static library folded into pg_orca.so. This makes the extension
+# self-contained — no runtime libxerces-c.so dependency — which matters
+# for the deb/rpm release packages (self-hosted Supabase, distroless
+# containers, hosts without a matching xerces-c package).
+#
+# Default on macOS: use Homebrew's xerces-c. Release packaging is
+# Linux-only; for macOS dev builds the system library is easier and
+# avoids quirks of the static build on the Apple toolchain.
+#
+# Override either way with -DPG_ORCA_BUNDLED_XERCES=ON/OFF.
 # -------------------------------------------------------------------
-find_package(PkgConfig QUIET)
-if(PKG_CONFIG_FOUND)
-    pkg_check_modules(XERCES xerces-c)
-endif()
-
-if(XERCES_FOUND)
-    # pkg-config succeeded — prefer absolute paths from XERCES_LINK_LIBRARIES so
-    # the linker doesn't need to search for it. On macOS Homebrew, xerces-c
-    # lives in /opt/homebrew/opt/xerces-c/lib which is not a default search
-    # path, so passing only "-lxerces-c" fails with "library not found".
-    if(XERCES_LINK_LIBRARIES)
-        set(XERCES_LIB ${XERCES_LINK_LIBRARIES})
-    else()
-        set(XERCES_LIB ${XERCES_LIBRARIES})
-    endif()
-    set(XERCES_INCLUDE ${XERCES_INCLUDE_DIRS})
-    message(STATUS "xerces-c (pkg-config): ${XERCES_LIB}")
+if(APPLE)
+    set(_pg_orca_bundled_default OFF)
 else()
-    # Fall back to manual search
-    find_library(XERCES_LIB xerces-c
-        PATHS
-            /opt/homebrew/opt/xerces-c/lib   # Apple Silicon Homebrew
-            /usr/local/opt/xerces-c/lib      # Intel Homebrew
-            /usr/local/lib                   # Linux generic
-            /usr/lib
-            /usr/lib/x86_64-linux-gnu        # Debian/Ubuntu amd64
-            /usr/lib/aarch64-linux-gnu       # Debian/Ubuntu arm64
-    )
-    find_path(XERCES_INCLUDE xercesc/util/XercesDefs.hpp
-        PATHS
-            /opt/homebrew/opt/xerces-c/include
-            /usr/local/opt/xerces-c/include
-            /usr/local/include
-            /usr/include
-    )
-    if(NOT XERCES_LIB OR NOT XERCES_INCLUDE)
+    set(_pg_orca_bundled_default ON)
+endif()
+option(PG_ORCA_BUNDLED_XERCES
+    "Build xerces-c from third_party/ submodule and link statically"
+    ${_pg_orca_bundled_default})
+
+if(PG_ORCA_BUNDLED_XERCES)
+    set(_xerces_src "${CMAKE_SOURCE_DIR}/third_party/xerces-c")
+    if(NOT EXISTS "${_xerces_src}/CMakeLists.txt")
         message(FATAL_ERROR
-            "xerces-c not found. Install it (e.g. 'apt install libxerces-c-dev' "
-            "or 'brew install xerces-c') or set -DXERCES_LIB= and "
-            "-DXERCES_INCLUDE= manually.")
+            "PG_ORCA_BUNDLED_XERCES=ON but ${_xerces_src}/CMakeLists.txt is "
+            "missing. Run: git submodule update --init --recursive")
     endif()
-    message(STATUS "xerces-c (manual): ${XERCES_LIB}, headers: ${XERCES_INCLUDE}")
+
+    # Force xerces options before adding its subdirectory. FORCE is required
+    # because xerces-c declares these with CACHE; without FORCE our values
+    # would be ignored on the second cmake run.
+    set(BUILD_SHARED_LIBS    OFF       CACHE BOOL   "" FORCE)
+    set(network              OFF       CACHE BOOL   "" FORCE)  # no socket-based entity resolver
+    set(transcoder           "gnuiconv" CACHE STRING "" FORCE) # use glibc iconv, not ICU
+    set(message-loader       "inmemory" CACHE STRING "" FORCE) # no external catalog files
+    set(threads              ON        CACHE BOOL   "" FORCE)
+    # Suppress xerces install rules; we never install its headers/libs.
+    set(CMAKE_SKIP_INSTALL_RULES_BACKUP "${CMAKE_SKIP_INSTALL_RULES}")
+    set(CMAKE_SKIP_INSTALL_RULES TRUE)
+    add_subdirectory(third_party/xerces-c EXCLUDE_FROM_ALL)
+    set(CMAKE_SKIP_INSTALL_RULES "${CMAKE_SKIP_INSTALL_RULES_BACKUP}")
+
+    set_target_properties(xerces-c PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_VISIBILITY_PRESET     hidden
+        VISIBILITY_INLINES_HIDDEN ON)
+
+    # The xerces-c target propagates its include dirs as PUBLIC, so consumers
+    # only need to link to it. Keep XERCES_INCLUDE empty for the static path.
+    set(XERCES_LIB     xerces-c)
+    set(XERCES_INCLUDE "")
+    message(STATUS "xerces-c: bundled static build (third_party/xerces-c)")
+else()
+    # Legacy path: find a system-installed xerces-c.
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(XERCES xerces-c)
+    endif()
+
+    if(XERCES_FOUND)
+        # pkg-config succeeded — prefer absolute paths from XERCES_LINK_LIBRARIES
+        # so the linker doesn't need to search for it. On macOS Homebrew,
+        # xerces-c lives in /opt/homebrew/opt/xerces-c/lib which is not a
+        # default search path, so passing only "-lxerces-c" fails.
+        if(XERCES_LINK_LIBRARIES)
+            set(XERCES_LIB ${XERCES_LINK_LIBRARIES})
+        else()
+            set(XERCES_LIB ${XERCES_LIBRARIES})
+        endif()
+        set(XERCES_INCLUDE ${XERCES_INCLUDE_DIRS})
+        message(STATUS "xerces-c (pkg-config): ${XERCES_LIB}")
+    else()
+        find_library(XERCES_LIB xerces-c
+            PATHS
+                /opt/homebrew/opt/xerces-c/lib   # Apple Silicon Homebrew
+                /usr/local/opt/xerces-c/lib      # Intel Homebrew
+                /usr/local/lib                   # Linux generic
+                /usr/lib
+                /usr/lib/x86_64-linux-gnu        # Debian/Ubuntu amd64
+                /usr/lib/aarch64-linux-gnu       # Debian/Ubuntu arm64
+        )
+        find_path(XERCES_INCLUDE xercesc/util/XercesDefs.hpp
+            PATHS
+                /opt/homebrew/opt/xerces-c/include
+                /usr/local/opt/xerces-c/include
+                /usr/local/include
+                /usr/include
+        )
+        if(NOT XERCES_LIB OR NOT XERCES_INCLUDE)
+            message(FATAL_ERROR
+                "xerces-c not found. Install it (e.g. 'apt install libxerces-c-dev' "
+                "or 'brew install xerces-c'), set -DXERCES_LIB= and "
+                "-DXERCES_INCLUDE= manually, or use the default "
+                "-DPG_ORCA_BUNDLED_XERCES=ON to build from third_party/.")
+        endif()
+        message(STATUS "xerces-c (manual): ${XERCES_LIB}, headers: ${XERCES_INCLUDE}")
+    endif()
 endif()
 
 # -------------------------------------------------------------------
@@ -131,6 +185,15 @@ file(GLOB_RECURSE ORCA_CORE_SRC CONFIGURE_DEPENDS
 )
 
 add_library(orca_core OBJECT ${ORCA_CORE_SRC})
+
+# Pull in xerces-c headers via the target's PUBLIC interface. For the
+# bundled build XERCES_LIB is the "xerces-c" target which propagates its
+# header search path; for the system build XERCES_LIB is a library path
+# with no usage requirements (XERCES_INCLUDE supplies headers separately,
+# see target_include_directories below). OBJECT libs accept
+# target_link_libraries since CMake 3.12 — no symbol is actually linked,
+# but compile-time properties propagate.
+target_link_libraries(orca_core PUBLIC ${XERCES_LIB})
 
 target_compile_definitions(orca_core PUBLIC
     $<$<CONFIG:Debug>:GPOS_DEBUG>
