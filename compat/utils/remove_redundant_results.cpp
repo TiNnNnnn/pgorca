@@ -244,6 +244,14 @@ remove_redundant_results_walker(Plan *plan)
 
 			child_plan->targetlist = tlist;
 
+			/* The child absorbs the Result's projection, so it must also
+			 * absorb the Result's cost/size estimates -- otherwise the
+			 * projection's eval cost silently vanishes from the plan. */
+			child_plan->startup_cost = result_plan->plan.startup_cost;
+			child_plan->total_cost = result_plan->plan.total_cost;
+			child_plan->plan_rows = result_plan->plan.plan_rows;
+			child_plan->plan_width = result_plan->plan.plan_width;
+
 			return child_plan;
 		}
 	}
