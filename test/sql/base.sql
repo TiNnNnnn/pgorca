@@ -209,5 +209,26 @@ SELECT o_orderkey, sum(o_custkey + o_orderkey)/20 FROM orders GROUP BY o_orderke
 SELECT * FROM orders WHERE EXISTS (SELECT 1 FROM nation WHERE nation.n_regionkey = orders.o_custkey AND nation.n_regionkey = 10);
 SELECT *, (SELECT 2 FROM nation WHERE nation.n_regionkey = orders.o_custkey AND nation.n_regionkey = 10) FROM orders WHERE EXISTS (SELECT 1 FROM nation WHERE nation.n_regionkey = orders.o_custkey AND nation.n_regionkey = 10);
 
+-- ORCA bug: a boolean ON-clause of a LEFT JOIN must not be pushed down as a
+-- scan filter on the outer relation. When the same outer relation feeds
+-- multiple LEFT JOINs whose ON-clauses use the same boolean column AND there
+-- is a WHERE on top, the normalizer used to push the ON-pred onto the LOJ's
+-- own outer child, discarding outer rows that should be null-padded.
+create table loj_bool_x(c1 boolean);
+create table loj_bool_y1(c1 boolean);
+create table loj_bool_y2(c1 boolean);
+insert into loj_bool_x values (true), (false), (false);
+insert into loj_bool_y1 values (true);
+insert into loj_bool_y2 values (true);
+
+-- Expect 2 rows: the two FALSE rows in loj_bool_x, with NULL from loj_bool_y2.
+-- The plan must NOT contain "Filter: c1" on Seq Scan of loj_bool_x.
+select loj_bool_x.c1, loj_bool_y2.c1 as y2c1
+  from loj_bool_x left join loj_bool_y1 on loj_bool_x.c1
+                  left join loj_bool_y2 on loj_bool_x.c1
+ where loj_bool_y2.c1 is null
+ order by 1, 2;
+
 -- Cleanup: drop tables created in this test so subsequent tests start clean.
 DROP TABLE IF EXISTS nation, customer, orders, product, sale, test_table, boolindex CASCADE;
+DROP TABLE IF EXISTS loj_bool_x, loj_bool_y1, loj_bool_y2 CASCADE;
