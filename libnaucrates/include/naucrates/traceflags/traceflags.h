@@ -238,6 +238,13 @@ enum EOptTraceFlag
 	// disable inner merge join alternatives
 	EopttraceDisableInnerMergeJoin = 103050,
 
+	// MONSOON: preserve logical operators for DSL rule matching.
+	// When set, CExpressionPreprocessor SKIPS the operator-collapsing steps
+	// (PruneUnusedComputedCols / CollapseProjects / TransposeSelectAndProject)
+	// so the DSL matcher sees the un-collapsed CLogicalProject/CLogicalSelect
+	// tree in exploration. Driven by the pg_orca.enable_dsl_rule GUC.
+	EopttracePreserveOpsForDSL = 103051,
+
 	///////////////////////////////////////////////////////
 	///////////////////// statistics flags ////////////////
 	//////////////////////////////////////////////////////
