@@ -42,7 +42,6 @@ extern "C" {
 
 extern "C" {
 PG_FUNCTION_INFO_V1(DisableXform);
-
 Datum DisableXform(PG_FUNCTION_ARGS)
 {
 	char *szXform = text_to_cstring(PG_GETARG_TEXT_P(0));
@@ -77,7 +76,6 @@ Datum DisableXform(PG_FUNCTION_ARGS)
 
 extern "C" {
 PG_FUNCTION_INFO_V1(EnableXform);
-
 Datum EnableXform(PG_FUNCTION_ARGS)
 {
 	char *szXform = text_to_cstring(PG_GETARG_TEXT_P(0));
