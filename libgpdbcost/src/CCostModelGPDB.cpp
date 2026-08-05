@@ -45,6 +45,14 @@
 using namespace gpos;
 using namespace gpdbcost;
 
+// Only projection lists wider than this many computed expressions are charged a
+// per-expression CPU cost in CostComputeScalar. Narrow projections keep their
+// previously calibrated cost so ordinary plans are unaffected; only pathological
+// wide projections (e.g. hundreds of array subscripts) are penalized enough to
+// be pushed below Gather Motions instead of computed single-threaded on the
+// coordinator.
+#define GPOPT_COMPUTE_SCALAR_WIDE_THRESHOLD ((ULONG) 64)
+
 namespace
 {
 // Warm-cache OLS-derived constants for index probes inside an NL join.
@@ -205,17 +213,38 @@ CCostModelGPDB::CostComputeScalar(CMemoryPool *mp, CExpressionHandle &exprhdl,
 
 	CCost costCompute(0);
 
+	const CDouble dScalarFuncCost =
+		pcmgpdb->GetCostModelParams()
+			->PcpLookup(CCostModelParamsGPDB::EcpScalarFuncCost)
+			->Get();
+
 	if (exprhdl.DeriveHasScalarFuncProject(1))
 	{
 		// If the compute scalar operator has a scalar func operator in the
 		// project list then aggregate that cost of the scalar func. The number
 		// of times the scalar func is run is proportional to the number of
 		// rows.
+		costCompute = CCost(dScalarFuncCost.Get() * rows);
+	}
+
+	// Charge CPU cost for evaluating each projected scalar expression once per
+	// row, but only for very wide projection lists. Without this, wide
+	// projections (e.g. hundreds of array subscripts) appear free, so ORCA
+	// prefers to compute them on a singleton locus above a Gather Motion
+	// (single process, all rows) instead of pushing the projection below the
+	// Motion where it runs in parallel across segments on fewer rows each.
+	//
+	// The per-expression cost is only applied to expressions beyond
+	// GPOPT_COMPUTE_SCALAR_WIDE_THRESHOLD so that ordinary narrow projections
+	// keep their previously calibrated cost (and plans) unchanged, while the
+	// pathological wide case is costed high enough to be pushed below Motions.
+	ULONG ulProjExprs = exprhdl.DeriveDefinedColumns(1)->Size();
+	if (ulProjExprs > GPOPT_COMPUTE_SCALAR_WIDE_THRESHOLD)
+	{
 		costCompute =
-			CCost(pcmgpdb->GetCostModelParams()
-					  ->PcpLookup(CCostModelParamsGPDB::EcpScalarFuncCost)
-					  ->Get() *
-				  rows);
+			costCompute +
+			CCost((ulProjExprs - GPOPT_COMPUTE_SCALAR_WIDE_THRESHOLD) * rows *
+				  dScalarFuncCost.Get());
 	}
 
 	return costLocal + costChild + costCompute;
