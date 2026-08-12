@@ -239,7 +239,7 @@ CPhysicalPartitionSelector::PppsRequired(
 
 	CPartitionPropagationSpec *pps_result =
 		GPOS_NEW(mp) CPartitionPropagationSpec(mp);
-	pps_result->InsertAllExcept(pppsRequired, m_scan_id);
+	pps_result->InsertCanonicalResidual(pppsRequired, m_scan_id);
 	return pps_result;
 }
 

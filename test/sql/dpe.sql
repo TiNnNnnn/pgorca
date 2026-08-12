@@ -169,6 +169,148 @@ RESET enable_hashjoin;
 RESET enable_mergejoin;
 
 -- ------------------------------------------------------------
+-- 8. Multi-branch UNION ALL joined on the partition key.
+--
+--    The join above the UNION ALL requests partition propagation for all
+--    branches at once, and every partition selector used to re-request the
+--    remaining scan ids from its own group, so any subset of the scan ids
+--    was reachable as a distinct optimization context and planning time
+--    grew exponentially with the branch count (10 branches took ~15s here,
+--    an 11-branch customer query on Cloudberry did not finish in 300s).
+--    Selector chains are now pinned to one canonical order (ascending scan
+--    id, outermost first), which keeps the reachable contexts linear while
+--    preserving every partition selector.
+-- ------------------------------------------------------------
+
+CREATE SCHEMA dpe_band;
+SET search_path = dpe_band;
+
+-- Ten range-partitioned tables with identical layout; evt_dtm is the
+-- partition key.  Each table holds every (eqp_id, day) combination so the
+-- join below has matches in all branches.
+DO $$
+DECLARE i int;
+BEGIN
+  FOR i IN 1..10 LOOP
+    EXECUTE format('CREATE TABLE band_t%s (eqp_id text, evt_dtm timestamp, val int) PARTITION BY RANGE (evt_dtm)', i);
+    EXECUTE format('CREATE TABLE band_t%s_p1 PARTITION OF band_t%s FOR VALUES FROM (''2026-01-01'') TO (''2026-02-01'')', i, i);
+    EXECUTE format('CREATE TABLE band_t%s_p2 PARTITION OF band_t%s FOR VALUES FROM (''2026-02-01'') TO (''2026-03-01'')', i, i);
+    EXECUTE format('CREATE TABLE band_t%s_p3 PARTITION OF band_t%s FOR VALUES FROM (''2026-03-01'') TO (''2026-04-01'')', i, i);
+    EXECUTE format('CREATE TABLE band_t%s_p4 PARTITION OF band_t%s FOR VALUES FROM (''2026-04-01'') TO (''2026-05-01'')', i, i);
+    EXECUTE format('CREATE TABLE band_t%s_def PARTITION OF band_t%s DEFAULT', i, i);
+    EXECUTE format('INSERT INTO band_t%s SELECT ''EQ'' || e, timestamp ''2026-01-01'' + d * interval ''1 day'', e * 100 + d FROM generate_series(0,9) e, generate_series(0,99) d', i);
+    EXECUTE format('ANALYZE band_t%s', i);
+  END LOOP;
+END $$;
+
+-- Driver table; all values fall into a single monthly partition, so run-time
+-- pruning selects 2 of 5 partitions (that month plus the default partition).
+CREATE TABLE band_drv(eqp_id text, from_dt timestamp);
+INSERT INTO band_drv
+SELECT 'EQ' || g, timestamp '2026-02-01' + g * interval '1 day'
+FROM generate_series(1, 5) g;
+ANALYZE band_drv;
+
+-- If the exponential-context blowup is ever reintroduced, fail this
+-- statement quickly instead of hanging the whole test run.
+SET statement_timeout = '60s';
+
+-- The plan must keep one partition selector per UNION ALL branch, nested in
+-- ascending scan-id order (band_t1 outermost).
+EXPLAIN (costs off)
+SELECT count(*), sum(t.val)
+FROM (          SELECT eqp_id, evt_dtm, val FROM band_t1
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t2
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t3
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t4
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t5
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t6
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t7
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t8
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t9
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t10) t
+JOIN band_drv ap ON t.evt_dtm = ap.from_dt;
+
+-- Run-time pruning: every branch but the first scans 2 of its 5 partitions.
+-- (The first scan id is not pruned at run time; that is a separate
+-- pre-existing pg_orca gap, unchanged by the canonical-order fix.)
+-- Counted from EXPLAIN ANALYZE rather than diffed directly, so the Hash
+-- node's memory-usage line cannot make the test machine-dependent.
+CREATE FUNCTION band_plan_summary(q text)
+RETURNS TABLE(selectors bigint, dyn_scans bigint, scanned_2 bigint, scanned_5 bigint)
+LANGUAGE plpgsql AS $fn$
+DECLARE
+    ln text;
+    sel bigint := 0;
+    dts bigint := 0;
+    p2  bigint := 0;
+    p5  bigint := 0;
+BEGIN
+    FOR ln IN EXECUTE
+        'EXPLAIN (analyze, costs off, timing off, summary off, buffers off) ' || q
+    LOOP
+        IF      ln LIKE '%(PartitionSelector)%'   THEN sel := sel + 1;
+        ELSIF   ln LIKE '%(DynamicTableScan)%'    THEN dts := dts + 1;
+        ELSIF   ln LIKE '%Partitions Scanned: 2%' THEN p2  := p2  + 1;
+        ELSIF   ln LIKE '%Partitions Scanned: 5%' THEN p5  := p5  + 1;
+        END IF;
+    END LOOP;
+    RETURN QUERY SELECT sel, dts, p2, p5;
+END
+$fn$;
+
+SELECT * FROM band_plan_summary($q$
+SELECT count(*), sum(t.val)
+FROM (          SELECT eqp_id, evt_dtm, val FROM band_t1
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t2
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t3
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t4
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t5
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t6
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t7
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t8
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t9
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t10) t
+JOIN band_drv ap ON t.evt_dtm = ap.from_dt
+$q$);
+
+SELECT count(*), sum(t.val)
+FROM (          SELECT eqp_id, evt_dtm, val FROM band_t1
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t2
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t3
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t4
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t5
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t6
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t7
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t8
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t9
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t10) t
+JOIN band_drv ap ON t.evt_dtm = ap.from_dt;
+
+RESET statement_timeout;
+
+-- Same result from the PG planner.
+SET pg_orca.enable_orca TO off;
+
+SELECT count(*), sum(t.val)
+FROM (          SELECT eqp_id, evt_dtm, val FROM band_t1
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t2
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t3
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t4
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t5
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t6
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t7
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t8
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t9
+      UNION ALL SELECT eqp_id, evt_dtm, val FROM band_t10) t
+JOIN band_drv ap ON t.evt_dtm = ap.from_dt;
+
+SET pg_orca.enable_orca TO on;
+
+DROP SCHEMA dpe_band CASCADE;
+RESET search_path;
+
+-- ------------------------------------------------------------
 -- Cleanup
 -- ------------------------------------------------------------
 

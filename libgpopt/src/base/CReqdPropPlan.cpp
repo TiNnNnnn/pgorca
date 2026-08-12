@@ -309,6 +309,17 @@ CReqdPropPlan::HashValue() const
 	ulHash = gpos::CombineHashes(ulHash, m_per->HashValue());
 	ulHash = gpos::CombineHashes(ulHash, m_pcter->HashValue());
 
+	/*
+	 * Include partition propagation in the hash, since Equals() compares it.
+	 * Leaving it out sends contexts that differ only in partition
+	 * propagation into a single bucket, degrading optimization/cost context
+	 * lookups to linear chain scans with expensive deep comparisons.
+	 */
+	if (nullptr != m_pepp)
+	{
+		ulHash = gpos::CombineHashes(ulHash, m_pepp->HashValue());
+	}
+
 	return ulHash;
 }
 

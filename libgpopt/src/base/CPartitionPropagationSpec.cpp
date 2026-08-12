@@ -258,6 +258,27 @@ CPartitionPropagationSpec::InsertAllowedConsumers(
 }
 
 void
+CPartitionPropagationSpec::InsertCanonicalResidual(
+	CPartitionPropagationSpec *pps, ULONG scan_id)
+{
+	UlongToSPartPropSpecInfoMapIter hmulpi(pps->m_part_prop_spec_infos);
+	while (hmulpi.Advance())
+	{
+		SPartPropSpecInfo *other_info =
+			const_cast<SPartPropSpecInfo *>(hmulpi.Value());
+
+		if (other_info->m_scan_id == scan_id ||
+			(other_info->m_type == EpptPropagator &&
+			 other_info->m_scan_id < scan_id))
+		{
+			continue;
+		}
+
+		Insert(other_info);
+	}
+}
+
+void
 CPartitionPropagationSpec::InsertAllExcept(CPartitionPropagationSpec *pps,
 										   ULONG scan_id)
 {
@@ -403,6 +424,23 @@ CPartitionPropagationSpec::AppendEnforcers(CMemoryPool *mp,
 										   CExpressionArray *pdrgpexpr,
 										   CExpression *expr)
 {
+	COptCtxt *opt_ctxt = COptCtxt::PoctxtFromTLS();
+
+	/*
+	 * Enforce only the propagator with the smallest scan id, instead of one
+	 * single-selector alternative per propagator.  Each selector strips its
+	 * own scan id and re-requests the remaining propagators from its child
+	 * (the same group), so enforcing them one at a time in a canonical
+	 * order still resolves the whole request, one selector per round.
+	 * Emitting an alternative per propagator instead unfolds a request
+	 * carrying N propagators into optimization contexts for every subset
+	 * of the N scan ids (2^N contexts on the same group); the canonical
+	 * order restricts the unfolding to the N suffixes.  Selector order
+	 * carries no semantics: a selector only computes a partition bitmap
+	 * for its scan id and passes tuples through unchanged.
+	 */
+	const SPartPropSpecInfo *info_min = nullptr;
+
 	UlongToSPartPropSpecInfoMapIter hmulpi(m_part_prop_spec_infos);
 	while (hmulpi.Advance())
 	{
@@ -413,31 +451,40 @@ CPartitionPropagationSpec::AppendEnforcers(CMemoryPool *mp,
 			continue;
 		}
 
-		COptCtxt *opt_ctxt = COptCtxt::PoctxtFromTLS();
-		ULONG selector_id = opt_ctxt->NextPartSelectorId();
-
-		info->m_root_rel_mdid->AddRef();
-		info->m_filter_expr->AddRef();
-		expr->AddRef();
-
-		CExpression *part_selector = GPOS_NEW(mp)
-			CExpression(mp,
-						GPOS_NEW(mp) CPhysicalPartitionSelector(
-							mp, info->m_scan_id, selector_id,
-							info->m_root_rel_mdid, info->m_filter_expr),
-						expr);
-
-		IStatistics *stats = exprhdl.Pstats();
-
-		info->m_filter_expr->AddRef();
-		stats->AddRef();
-		opt_ctxt->AddPartSelectorInfo(
-			selector_id, GPOS_NEW(mp) SPartSelectorInfoEntry(
-							 selector_id, info->m_filter_expr, stats));
-
-
-		pdrgpexpr->Append(part_selector);
+		if (nullptr == info_min || info->m_scan_id < info_min->m_scan_id)
+		{
+			info_min = info;
+		}
 	}
+
+	if (nullptr == info_min)
+	{
+		return;
+	}
+
+	const SPartPropSpecInfo *info = info_min;
+	ULONG selector_id = opt_ctxt->NextPartSelectorId();
+
+	info->m_root_rel_mdid->AddRef();
+	info->m_filter_expr->AddRef();
+	expr->AddRef();
+
+	CExpression *part_selector = GPOS_NEW(mp)
+		CExpression(mp,
+					GPOS_NEW(mp) CPhysicalPartitionSelector(
+						mp, info->m_scan_id, selector_id,
+						info->m_root_rel_mdid, info->m_filter_expr),
+					expr);
+
+	IStatistics *stats = exprhdl.Pstats();
+
+	info->m_filter_expr->AddRef();
+	stats->AddRef();
+	opt_ctxt->AddPartSelectorInfo(
+		selector_id, GPOS_NEW(mp) SPartSelectorInfoEntry(
+						 selector_id, info->m_filter_expr, stats));
+
+	pdrgpexpr->Append(part_selector);
 }
 
 //---------------------------------------------------------------------------

@@ -75,7 +75,9 @@ private:
 			CRefCount::SafeRelease(m_filter_expr);
 		}
 
-		// hash function
+		// hash function; must be consistent with Equals(): hash only the
+		// fields Equals() compares (scan id, type, selector ids by content),
+		// or else equal infos may land in different hash buckets
 		ULONG
 		HashValue() const
 		{
@@ -83,15 +85,11 @@ private:
 
 			ulHash =
 				gpos::CombineHashes(ulHash, gpos::HashValue<ULONG>(&m_scan_id));
+			ulHash = gpos::CombineHashes(ulHash, static_cast<ULONG>(m_type));
 			if (m_selector_ids)
 			{
-				ulHash = gpos::CombineHashes(
-					ulHash, gpos::HashPtr<CBitSet>(m_selector_ids));
-			}
-			if (m_filter_expr)
-			{
-				ulHash = gpos::CombineHashes(
-					ulHash, CExpression::HashValue(m_filter_expr));
+				ulHash =
+					gpos::CombineHashes(ulHash, m_selector_ids->HashValue());
 			}
 
 			return ulHash;
@@ -202,6 +200,16 @@ public:
 								CBitSet *allowed_scan_ids);
 
 	void InsertAllExcept(CPartitionPropagationSpec *pps, ULONG scan_id);
+
+	// insert the canonical residual request below a partition selector for
+	// scan_id: everything except the selector's own scan id and propagator
+	// requests with a smaller scan id.  Dropped propagators are enforced
+	// above the selector instead, which pins selector chains to a single
+	// canonical order; without this, every selector in a group re-requests
+	// an arbitrary subset of the propagators from the same group, unfolding
+	// a request with N propagators into 2^N optimization contexts.
+	void InsertCanonicalResidual(CPartitionPropagationSpec *pps,
+								 ULONG scan_id);
 
 	const CBitSet *SelectorIds(ULONG scan_id) const;
 

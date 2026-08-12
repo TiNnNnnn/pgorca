@@ -176,5 +176,13 @@ BOOL
 COptCtxt::AddPartSelectorInfo(ULONG selector_id, SPartSelectorInfoEntry *entry)
 {
 	ULONG *key = GPOS_NEW(m_mp) ULONG(selector_id);
-	return m_part_selector_info->Insert(key, entry);
+
+	/*
+	 * Selector ids come from a monotone counter and are therefore unique,
+	 * so skip the duplicate-key scan: enforcers can be appended a huge
+	 * number of times (e.g. many-branch UNION ALL under a partition-key
+	 * join), and Insert()'s linear probe would make registration quadratic.
+	 */
+	m_part_selector_info->InsertUnique(key, entry);
+	return true;
 }

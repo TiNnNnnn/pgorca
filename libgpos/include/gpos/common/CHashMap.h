@@ -231,6 +231,29 @@ public:
 		return true;
 	}
 
+	// insert an element skipping the duplicate-key lookup; the caller must
+	// guarantee the key is not yet present (e.g. keys drawn from a counter),
+	// so that inserts stay O(1) regardless of chain length
+	void
+	InsertUnique(K *key, T *value)
+	{
+		GPOS_ASSERT(nullptr == Find(key));
+		CHashSetElemArray **chain = GetChain(key);
+		if (nullptr == *chain)
+		{
+			*chain = GPOS_NEW(m_mp) CHashSetElemArray(m_mp);
+			INT chain_idx = HashFn(key) % m_num_chains;
+			m_filled_chains->Append(GPOS_NEW(m_mp) INT(chain_idx));
+		}
+
+		CHashMapElem *elem =
+			GPOS_NEW(m_mp) CHashMapElem(key, value, true /*fOwn*/);
+		(*chain)->Append(elem);
+
+		m_size++;
+		m_keys->Append(key);
+	}
+
 	// lookup a value by its key
 	T *
 	Find(const K *key) const
