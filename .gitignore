@@ -8,3 +8,5 @@ test/results/
 .claude/
 CLAUDE.md
 AGENT.md
+dataset
+docs
