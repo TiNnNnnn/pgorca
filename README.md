@@ -8,13 +8,13 @@
   <a href="https://github.com/quantumiodb/pgorca/actions/workflows/build.yml"><img src="https://github.com/quantumiodb/pgorca/actions/workflows/build.yml/badge.svg?branch=main" alt="build"/></a>
 </p>
 
-A PostgreSQL 18 extension that plugs the **ORCA query optimizer** (originally from Greenplum / Apache Cloudberry) into a standard single-node PostgreSQL instance.
+A PostgreSQL 18 / 19 extension that plugs the **ORCA query optimizer** (originally from Greenplum / Apache Cloudberry) into a standard single-node PostgreSQL instance.
 
 ## Overview
 
 ORCA is a cost-based, rule-driven query optimizer that operates on an intermediate representation called DXL (Data eXchange Language). It was designed for massively-parallel processing (MPP) databases but contains a powerful optimization engine that is useful in single-node mode as well.
 
-This project extracts ORCA's four core libraries and the PostgreSQL integration layer from Apache Cloudberry, adapts them for PG18, and packages the result as a `CREATE EXTENSION`-installable plugin.
+This project extracts ORCA's four core libraries and the PostgreSQL integration layer from Apache Cloudberry, adapts them for PG18 and PG19, and packages the result as a `CREATE EXTENSION`-installable plugin.
 
 The ORCA optimizer is the work of many people from the Greenplum, Pivotal/VMware, and Apache Cloudberry projects. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for acknowledgments.
 
@@ -32,10 +32,16 @@ The ORCA optimizer is the work of many people from the Greenplum, Pivotal/VMware
 
 ## Requirements
 
-- PostgreSQL 18 (commit 8a431b6d)
+- PostgreSQL 18 (primary target), or PostgreSQL 19 beta
 - [xerces-c](https://xerces.apache.org/xerces-c/) (XML parsing for DXL)
-- CMake ≥ 3.16
+- CMake ≥ 3.20
 - C++17 compiler (clang or gcc)
+
+The same source tree builds against both majors — version differences are handled
+with `#if PG_VERSION_NUM >= 190000` guards, there is no separate branch. CI builds
+PG18 on Ubuntu (gcc/clang, Debug/Release), Ubuntu arm64, CentOS Stream 9, Rocky 9
+and macOS, and builds + runs the ORCA regression tests against PG19 on Rocky 9.
+See [PostgreSQL 19](#postgresql-19) for what is PG19-specific.
 
 On macOS with Homebrew:
 ```bash
@@ -46,13 +52,14 @@ brew install xerces-c cmake
 
 ### 1. Locate pg_config
 
-CMake needs `pg_config` from your PostgreSQL 18 installation to find headers,
-libraries, and install paths. Either add the PG `bin/` directory to `PATH`:
+CMake needs `pg_config` from the PostgreSQL installation you are building
+against to find headers, libraries, and install paths. Either add the PG `bin/`
+directory to `PATH`:
 
 ```bash
-export PATH="/path/to/pg18/bin:$PATH"
+export PATH="/path/to/pg/bin:$PATH"
 # verify
-pg_config --version   # should print "PostgreSQL 18.x"
+pg_config --version   # should print "PostgreSQL 18.x" or "PostgreSQL 19..."
 ```
 
 Or pass it explicitly on the CMake command line with `-DPG_CONFIG=...` (see below).
@@ -70,7 +77,7 @@ mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug
 
 # pg_config NOT on PATH — pass it explicitly
-cmake .. -DPG_CONFIG=/path/to/pg18/bin/pg_config -DCMAKE_BUILD_TYPE=Debug
+cmake .. -DPG_CONFIG=/path/to/pg/bin/pg_config -DCMAKE_BUILD_TYPE=Debug
 ```
 
 ```bash
@@ -87,7 +94,7 @@ cmake --build build -j$(nproc)
 
 ```bash
 mkdir build && cd build
-cmake .. -DPG_CONFIG=/path/to/pg18/bin/pg_config -DCMAKE_BUILD_TYPE=Debug -GNinja
+cmake .. -DPG_CONFIG=/path/to/pg/bin/pg_config -DCMAKE_BUILD_TYPE=Debug -GNinja
 ```
 
 ```bash
@@ -107,7 +114,7 @@ Replace `Debug` with `Release` in either generator. Example with Ninja:
 
 ```bash
 mkdir build-release && cd build-release
-cmake .. -DPG_CONFIG=/path/to/pg18/bin/pg_config -DCMAKE_BUILD_TYPE=Release -GNinja
+cmake .. -DPG_CONFIG=/path/to/pg/bin/pg_config -DCMAKE_BUILD_TYPE=Release -GNinja
 ninja -j$(nproc)
 ninja install
 ```
@@ -116,7 +123,7 @@ Or with plain CMake:
 
 ```bash
 mkdir build-release && cd build-release
-cmake .. -DPG_CONFIG=/path/to/pg18/bin/pg_config -DCMAKE_BUILD_TYPE=Release
+cmake .. -DPG_CONFIG=/path/to/pg/bin/pg_config -DCMAKE_BUILD_TYPE=Release
 cmake --build . --target install -j$(nproc)
 ```
 
@@ -210,4 +217,21 @@ Cloudberry's translation layer references many MPP-only types (`Motion`, `PlanSl
 ### GPDB GUCs
 
 Many ORCA configuration knobs were GPDB-specific GUCs. They are re-defined as real GUCs in `pg_orca.cpp` under the `optimizer.*` prefix, so existing ORCA code referencing them continues to work.
+
+### PostgreSQL 19
+
+PG19 is still a moving target, so treat it as preview support: it builds and passes
+`test/test.sh --orca-tests`, but the PG18 path is the one that gets the benchmark and
+regression mileage. Everything version-dependent is behind `#if PG_VERSION_NUM >= 190000`:
+
+- **`planner_hook` signature** — PG19 passes an extra `ExplainState *` argument; the hook
+  and both `standard_planner()` fallback paths are conditionally compiled (`pg_orca.cpp`).
+- **`RESPECT`/`IGNORE NULLS` window functions** (SQL:2003, new in PG19) — supported
+  natively rather than falling back: the null treatment is carried on
+  `CScalarWindowFunc` and round-tripped through DXL.
+- **SQL/PGQ `GRAPH_TABLE`** — the PG rewriter expands it into a LATERAL-joined subquery
+  before `planner_hook` runs, so these queries go through ORCA on the normal LATERAL path.
+  A defensive check falls back cleanly if an `RTE_GRAPH_TABLE` ever reaches the translator.
+- **`Int8GetDatum()`** — removed from `postgres.h` in PG19; `gpdbwrappers.cpp` supplies a
+  byte-identical `#ifndef`-guarded replacement so call sites are unchanged on both versions.
 
