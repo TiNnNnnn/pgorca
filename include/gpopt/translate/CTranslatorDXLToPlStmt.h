@@ -63,7 +63,6 @@ struct SubqueryScan;
 struct SubPlan;
 struct Result;
 struct Material;
-struct ShareInputScan;
 //struct Const;
 //struct List;
 

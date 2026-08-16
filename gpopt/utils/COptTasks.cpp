@@ -614,8 +614,9 @@ COptTasks::OptimizeTask(void *ptr)
 			GPOS_ASSERT(nullptr != query_output_dxlnode_array);
 
 			// pg_orca runs on single-node PostgreSQL — always disable motions
-			// (Motion nodes use T_Invalid as their node tag and would crash the
-			// PG18 executor if they ever appeared in the plan tree).
+			// (Motion carries an out-of-range stub node tag, see
+			// compat/cdb/cdb_plan_nodes.h, and would crash the PG18 executor
+			// if it ever appeared in the plan tree).
 			BOOL use_legacy_opfamilies =
 				(query_to_dxl_translator->GetDistributionHashOpsKind() ==
 				 DistrUseLegacyHashOps);

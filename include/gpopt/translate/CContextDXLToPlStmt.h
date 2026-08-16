@@ -34,7 +34,7 @@ extern "C" {
 #include "nodes/plannodes.h"
 }
 
-// Cloudberry MPP plan node stubs (PlanSlice, ShareInputScan, etc.)
+// Cloudberry MPP plan node stubs (PlanSlice, Motion, etc.)
 #include "cdb/cdb_plan_nodes.h"
 
 namespace gpdxl

@@ -60,8 +60,6 @@ using StringInfo = StringInfoData *;
 struct LogicalIndexes;
 struct ParseState;
 struct DefElem;
-struct PartitionSelector;
-struct Motion;
 struct Var;
 struct Const;
 struct ArrayExpr;

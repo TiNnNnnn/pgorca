@@ -4,12 +4,42 @@
  * Stub definitions for Cloudberry MPP plan node types that do not exist
  * in PostgreSQL 18. In pg_orca (single-node mode) these nodes are never
  * actually generated, but the translation code still references their types.
+ *
+ * Only the types the translation layer actually instantiates live here.
+ * Nodes that pg_orca translates into native PG18 plans instead (Sequence →
+ * folded away, DynamicSeqScan / PartitionSelector → CustomScan, ShareInputScan
+ * → subplans) have no stub at all.
  */
 #ifndef COMPAT_CDB_PLAN_NODES_H
 #define COMPAT_CDB_PLAN_NODES_H
 
 #include "postgres.h"
 #include "nodes/plannodes.h"
+
+/*
+ * Node tags for GPDB/CBDB-only plan nodes that do not exist in PG18.
+ *
+ * We assign distinct out-of-range values (>= 5000) rather than T_Invalid (0)
+ * so that the executor's "unrecognized node type: N" error message carries a
+ * meaningful, grep-able number instead of 0 which is hard to attribute.
+ * PG18's highest NodeTag is ~479, so 5000+ is safely out of range.
+ *
+ * The values mirror the relative ordering from Cloudberry's nodes.h so they
+ * are stable across rebuilds. Gaps (5002, 5004, 5005, 5007) are tags whose
+ * nodes pg_orca no longer stubs; leave them unused so the live tags keep their
+ * historical values.
+ */
+#define T_Motion				  ((NodeTag) 5001)
+#define T_SplitUpdate			  ((NodeTag) 5003)
+#define T_AssertOp				  ((NodeTag) 5006)
+#define T_DynamicIndexScan		  ((NodeTag) 5008)
+#define T_DynamicIndexOnlyScan	  ((NodeTag) 5009)
+#define T_DynamicBitmapHeapScan	  ((NodeTag) 5010)
+#define T_DynamicBitmapIndexScan  ((NodeTag) 5011)
+#define T_DynamicForeignScan	  ((NodeTag) 5012)
+
+/* MASTER_CONTENT_ID used in segment logic */
+#define MASTER_CONTENT_ID (-1)
 
 /* GangType — how a slice's executor gang is configured */
 typedef enum GangType
@@ -39,25 +69,9 @@ typedef struct PlanSlice
 	int			parentIndex;
 	GangType	gangType;
 	int			numsegments;
-	int			parallel_workers;
 	int			segindex;
 	DirectDispatchInfo directDispatch;
 } PlanSlice;
-
-/*
- * ShareInputScan — shared scan node for intra-slice data sharing.
- * Not generated in single-node mode.
- */
-typedef struct ShareInputScan
-{
-	Scan		scan;
-	bool		cross_slice;
-	int			share_id;
-	int			producer_slice_id;
-	int			this_slice_id;
-	int			nconsumers;
-	bool		discard_output;
-} ShareInputScan;
 
 typedef enum MotionType
 {
@@ -92,72 +106,14 @@ typedef struct Motion
 	Oid		   *hashFuncs;
 	int			numHashSegments;
 	AttrNumber	segidColIdx;
-	/* dispatch */
-	int			numOutputSegs;
-	int		   *outputSegIdx;
 } Motion;
 
 /*
- * Node tags for GPDB/CBDB-only plan nodes that do not exist in PG18.
- *
- * We assign distinct out-of-range values (≥ 5000) rather than T_Invalid (0)
- * so that the executor's "unrecognized node type: N" error message carries a
- * meaningful, grep-able number instead of 0 which is hard to attribute.
- * PG18's highest NodeTag is ~479, so 5000+ is safely out of range.
- *
- * The values mirror the relative ordering from Cloudberry's nodes.h so they
- * are stable across rebuilds:
- *   T_Motion           = 5001  (CBDB: after T_Limit)
- *   T_ShareInputScan   = 5002
- *   T_SplitUpdate      = 5003
- *   T_Sequence         = 5004  (CBDB: T_Sequence = T_BitmapAnd - 1 area)
- *   T_PartitionSelector= 5005
- *   T_AssertOp         = 5006
- *   T_DynamicSeqScan   = 5007
- *   T_DynamicIndexScan = 5008
- *   T_DynamicIndexOnlyScan    = 5009
- *   T_DynamicBitmapHeapScan   = 5010
- *   T_DynamicBitmapIndexScan  = 5011
- *   T_DynamicForeignScan      = 5012
- */
-#ifndef T_Motion
-#define T_Motion ((NodeTag) 5001)
-#endif
-#ifndef T_ShareInputScan
-#define T_ShareInputScan ((NodeTag) 5002)
-#endif
-#ifndef T_SplitUpdate
-#define T_SplitUpdate ((NodeTag) 5003)
-#endif
-#ifndef T_Sequence
-#define T_Sequence ((NodeTag) 5004)
-#endif
-#ifndef T_PartitionSelector
-#define T_PartitionSelector ((NodeTag) 5005)
-#endif
-
-/*
- * Sequence — GPDB-specific plan node that runs subplans in sequence.
- */
-typedef struct Sequence
-{
-	Plan		plan;
-	List	   *subplans;
-} Sequence;
-
-/*
- * DynamicSeqScan / DynamicIndexScan / DynamicBitmapHeapScan —
+ * DynamicIndexScan / DynamicBitmapHeapScan / ... —
  * GPDB-specific scan nodes for partitioned tables.
  * These use partition pruning at runtime. In PG18, ORCA should generate
  * Append plans instead, but we need the types to compile.
  */
-typedef struct DynamicSeqScan
-{
-	SeqScan		seqscan;
-	List	   *partOids;
-	List	   *join_prune_paramids;
-} DynamicSeqScan;
-
 typedef struct DynamicIndexScan
 {
 	IndexScan	indexscan;
@@ -171,22 +127,6 @@ typedef struct DynamicIndexOnlyScan
 	List	   *partOids;
 	List	   *join_prune_paramids;
 } DynamicIndexOnlyScan;
-
-#ifndef T_DynamicSeqScan
-#define T_DynamicSeqScan ((NodeTag) 5007)
-#endif
-#ifndef T_DynamicIndexScan
-#define T_DynamicIndexScan ((NodeTag) 5008)
-#endif
-#ifndef T_DynamicIndexOnlyScan
-#define T_DynamicIndexOnlyScan ((NodeTag) 5009)
-#endif
-#ifndef T_DynamicBitmapHeapScan
-#define T_DynamicBitmapHeapScan ((NodeTag) 5010)
-#endif
-#ifndef T_DynamicForeignScan
-#define T_DynamicForeignScan ((NodeTag) 5012)
-#endif
 
 typedef struct DynamicForeignScan
 {
@@ -209,31 +149,6 @@ typedef struct DynamicBitmapIndexScan
 	List	   *join_prune_paramids;
 } DynamicBitmapIndexScan;
 
-#ifndef T_DynamicBitmapIndexScan
-#define T_DynamicBitmapIndexScan ((NodeTag) 5011)
-#endif
-
-/*
- * PartitionSelector — GPDB-specific plan node for partition pruning.
- * Not in PG18. We stub it so translation code compiles; it maps to
- * a custom Result node with prune_info attached at execution.
- */
-struct PartitionPruneInfo;  /* forward decl from plannodes.h */
-typedef struct PartitionSelector
-{
-	Plan		plan;
-	int			paramid;
-	struct PartitionPruneInfo *part_prune_info;
-} PartitionSelector;
-
-#ifndef T_PartitionSelector
-#define T_PartitionSelector ((NodeTag) 5005)
-#endif
-/* MASTER_CONTENT_ID used in segment logic */
-#ifndef MASTER_CONTENT_ID
-#define MASTER_CONTENT_ID (-1)
-#endif
-
 /*
  * SplitUpdate — used for UPDATE with distribution key changes (MPP).
  * Not generated in single-node mode.
@@ -245,7 +160,6 @@ typedef struct SplitUpdate
 	AttrNumber *hashFilterColIdx;
 	Oid		   *hashFilterFuncs;
 	AttrNumber	actionColIdx;	/* attribute number of the action column */
-	AttrNumber	tupleoidColIdx; /* attribute number of the tuple OID column */
 } SplitUpdate;
 
 /*
@@ -258,37 +172,5 @@ typedef struct AssertOp
 	int			errcode;	/* SQLSTATE error code */
 	List	   *errmessage;	/* list of error messages (Const nodes) */
 } AssertOp;
-
-#ifndef T_AssertOp
-#define T_AssertOp ((NodeTag) 5006)
-#endif
-
-/*
- * PlannedStmt MPP-only fields absent from PG18.
- * We embed a side-channel struct so translation code can use the same
- * field-access syntax via macros.
- *
- * Usage: replace `planned_stmt->slices` etc. with macros in the .cpp file.
- * Or: use a compatibility PlannedStmt wrapper only during translation.
- *
- * Simplest approach: define a global side-channel for slice info and
- * provide macros that redirect field access.
- */
-
-typedef struct PgOrcaSliceContext
-{
-	int			numSlices;
-	PlanSlice  *slices;
-	int		   *subplan_sliceIds; /* ignored */
-} PgOrcaSliceContext;
-
-/* These macros redirect GPDB PlannedStmt field accesses to our side channel */
-#define pg_orca_slice_ctx_decl  PgOrcaSliceContext _orca_slice_ctx = {0, NULL, NULL}
-#define pg_orca_slice_ctx       (&_orca_slice_ctx)
-
-/* planned_stmt->intoPolicy: GPDB distribution policy — ignore in PG18 */
-/* planned_stmt->numSlices: use side channel */
-/* planned_stmt->slices: use side channel */
-/* planned_stmt->subplan_sliceIds: use side channel (ignored) */
 
 #endif /* COMPAT_CDB_PLAN_NODES_H */
