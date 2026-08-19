@@ -21,7 +21,6 @@ extern "C" {
 /* optimizer/orca.h not in PG18 — ORCA is now an extension */
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
-#include "utils/gpdbgucs.h"
 
 /* PG18 compat: GPDB session/command counters don't exist — use 0 */
 #ifndef gp_session_id

@@ -150,9 +150,6 @@ static const struct config_enum_entry pg_orca_cost_model_options[] = {
     {NULL, 0, false}
 };
 
-/* xforms array: indexed by xform id, true means disabled */
-bool  optimizer_xforms[512] = {false};
-
 /*
  * pg_orca.enable_dynamic_tablescan — when true (default), ORCA may emit
  * a single Custom Scan (DynamicTableScan) for partitioned tables, doing

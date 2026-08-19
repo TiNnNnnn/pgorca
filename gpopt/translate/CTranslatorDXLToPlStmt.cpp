@@ -34,7 +34,7 @@ extern "C" {
 #include "storage/lmgr.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/guc.h"
-#include "utils/gpdbgucs.h"
+#include "compat/utils/gpdbgucs.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
 #include "access/tupdesc.h"

@@ -42,7 +42,10 @@ extern double optimizer_damping_factor_groupby;
 /* --- string GUCs --- */
 extern char *optimizer_search_strategy_path;
 
-/* --- bool array GUC (xforms) --- */
+/* --- xform disable array ---
+ * Indexed by xform id, true = disabled; written by COptTasks::SetXform
+ * (enable_xform/disable_xform UDFs), read by PackConfigParamInBitset.
+ * Defined in CConfigParamMapping.cpp, sized CXform::ExfSentinel. */
 extern bool optimizer_xforms[];
 
 #ifdef __cplusplus

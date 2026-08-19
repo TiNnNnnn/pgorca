@@ -12,6 +12,9 @@ extern "C" {
 #include "utils/guc.h"
 }
 
+// declares optimizer_xforms[] (and other GPDB GUC externs) with C linkage
+#include "compat/utils/gpdbgucs.h"
+
 // optimizer_join_order GUC defined in pg_orca.cpp
 extern int optimizer_join_order;
 // pg_orca.enable_dynamic_tablescan GUC, also defined in pg_orca.cpp.
@@ -109,10 +112,13 @@ static bool orca_enable_mergejoin    = true;
 static bool enable_associativity     = true;
 static bool enable_right_outer_join  = true;
 
-// xforms disable array (indexed by xform id, true = disabled), defined in
-// pg_orca.cpp and set through the enable_xform()/disable_xform() UDFs via
-// COptTasks::SetXform
-extern bool optimizer_xforms[];
+// xforms disable array (indexed by xform id, true = disabled), set through
+// the enable_xform()/disable_xform() UDFs via COptTasks::SetXform.
+// Defined here (rather than in pg_orca.cpp with the GUCs) so the size can
+// come from the EXformId enum; declared for other consumers in
+// compat/utils/gpdbgucs.h, whose extern "C" is picked up via the include
+// above.
+bool optimizer_xforms[CXform::ExfSentinel] = {};
 
 // ---------------------------------------------------------------------------
 // Mapping table
