@@ -21,6 +21,10 @@ extern "C" {
 extern Datum DisableXform(PG_FUNCTION_ARGS);
 extern Datum EnableXform(PG_FUNCTION_ARGS);
 extern Datum LibraryVersion();
+
+/* defined in pg_orca.cpp; initializes GPOPT (xform factory etc.) if the
+ * planner hook has not already done so in this backend */
+extern void pg_orca_ensure_initialized(void);
 }
 
 #endif	// GPOPT_funcs_H

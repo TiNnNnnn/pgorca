@@ -41,9 +41,12 @@ extern "C" {
 //---------------------------------------------------------------------------
 
 extern "C" {
+PG_FUNCTION_INFO_V1(DisableXform);
+
 Datum DisableXform(PG_FUNCTION_ARGS)
 {
 	char *szXform = text_to_cstring(PG_GETARG_TEXT_P(0));
+	pg_orca_ensure_initialized();
 	bool is_result = COptTasks::SetXform(szXform, true /*fDisable*/);
 
 	StringInfoData str;
@@ -73,9 +76,12 @@ Datum DisableXform(PG_FUNCTION_ARGS)
 //---------------------------------------------------------------------------
 
 extern "C" {
+PG_FUNCTION_INFO_V1(EnableXform);
+
 Datum EnableXform(PG_FUNCTION_ARGS)
 {
 	char *szXform = text_to_cstring(PG_GETARG_TEXT_P(0));
+	pg_orca_ensure_initialized();
 	bool is_result = COptTasks::SetXform(szXform, false /*fDisable*/);
 
 	StringInfoData str;

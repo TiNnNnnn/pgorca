@@ -109,8 +109,10 @@ static bool orca_enable_mergejoin    = true;
 static bool enable_associativity     = true;
 static bool enable_right_outer_join  = true;
 
-// xforms array — all disabled by default (no xform overrides)
-static bool optimizer_xforms[CXform::ExfSentinel] = {};
+// xforms disable array (indexed by xform id, true = disabled), defined in
+// pg_orca.cpp and set through the enable_xform()/disable_xform() UDFs via
+// COptTasks::SetXform
+extern bool optimizer_xforms[];
 
 // ---------------------------------------------------------------------------
 // Mapping table

@@ -174,6 +174,27 @@ static bool orca_initialized = false;
  */
 MemoryContext OptimizerMemoryContext = NULL;
 
+/*
+ * Lazily create the ORCA top-level memory context and initialize GPOPT
+ * (memory pools, xform factory, metadata cache).  Called from the planner
+ * hook before the first optimization, and from the enable_xform()/
+ * disable_xform() UDFs, which need the xform factory populated even when
+ * no query has gone through ORCA yet in this backend.
+ */
+extern "C" void
+pg_orca_ensure_initialized(void)
+{
+    if (orca_initialized)
+        return;
+
+    OptimizerMemoryContext =
+        AllocSetContextCreate(TopMemoryContext,
+                              "GPORCA Top-level Memory Context",
+                              ALLOCSET_DEFAULT_SIZES);
+    InitGPOPT();
+    orca_initialized = true;
+}
+
 static planner_hook_type             prev_planner_hook        = nullptr;
 static explain_per_plan_hook_type    prev_per_plan_hook       = nullptr;
 static ExecutorStart_hook_type       prev_executor_start_hook = nullptr;
@@ -577,15 +598,7 @@ pg_orca_planner(Query *parse, const char *query_string,
         parse->rtable != NIL &&
         parse->rowMarks == NIL)
     {
-        if (!orca_initialized)
-        {
-            OptimizerMemoryContext =
-                AllocSetContextCreate(TopMemoryContext,
-                                      "GPORCA Top-level Memory Context",
-                                      ALLOCSET_DEFAULT_SIZES);
-            InitGPOPT();
-            orca_initialized = true;
-        }
+        pg_orca_ensure_initialized();
 
         /* Expand virtual generated columns before ORCA sees the query.
          * ORCA doesn't know about PG18 virtual generated columns and would
