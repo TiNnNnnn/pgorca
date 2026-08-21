@@ -1638,6 +1638,14 @@ transformGroupedWindows(Node *node, void *context)
 		subq->hasWindowFuncs = false;	/* reevaluate later */
 		subq->hasSubLinks = qry->hasSubLinks;	/* reevaluate later */
 
+		/* PG17+: the GROUP RTE stays inside qry->rtable, which moves into
+		 * the subquery below together with the grouped target entries whose
+		 * Vars reference it.  Carry the flag along, or the translator's
+		 * FlattenGroupRTEVars pass will skip the subquery and its RTE_GROUP
+		 * Vars will fail column-mapping lookup ("No variable entry found
+		 * due to incorrect normalization of query"). */
+		subq->hasGroupRTE = qry->hasGroupRTE;
+
 		/* Core of subquery input table expression */
 		subq->rtable = qry->rtable;
 		subq->rteperminfos = qry->rteperminfos;
@@ -1682,6 +1690,7 @@ transformGroupedWindows(Node *node, void *context)
 
 		/* Begin rewriting the outer query in place */
 		qry->hasAggs = false;		/* by construction */
+		qry->hasGroupRTE = false;	/* GROUP RTE now lives in the subquery */
 
 		/* Core of outer query input table expression */
 		qry->rtable = list_make1(rte);
