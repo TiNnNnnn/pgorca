@@ -42,6 +42,7 @@ jobs:
           sudo apt-get install -y \
             postgresql-server-dev-18 \
             libxerces-c-dev \
+            uuid-dev \
             default-jre-headless \
             cmake \
             ninja-build
@@ -100,6 +101,7 @@ jobs:
             postgresql-18 \
             postgresql-server-dev-18 \
             libxerces-c-dev \
+            uuid-dev \
             default-jre-headless \
             cmake \
             ninja-build
@@ -127,7 +129,7 @@ jobs:
 
       - name: Upload DSL E2E artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: dsl-e2e-results
           path: build/dsl-e2e/
@@ -151,6 +153,7 @@ jobs:
           dnf -y install \
             postgresql18 postgresql18-server postgresql18-devel \
             xerces-c-devel \
+            libuuid-devel \
             cmake ninja-build gcc-c++ \
             java-17-openjdk-headless \
             git diffutils \
@@ -197,7 +200,7 @@ jobs:
 
       - name: Upload test artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: centos-test-results
           path: |
@@ -222,6 +225,7 @@ jobs:
           dnf -y install \
             postgresql18-devel \
             xerces-c-devel \
+            libuuid-devel \
             cmake ninja-build gcc-c++ \
             java-17-openjdk-headless \
             git
@@ -272,6 +276,7 @@ jobs:
           dnf -y install \
             postgresql19 postgresql19-server postgresql19-contrib postgresql19-devel \
             xerces-c-devel \
+            libuuid-devel \
             cmake ninja-build gcc-c++ \
             java-17-openjdk-headless \
             git diffutils \
@@ -318,7 +323,7 @@ jobs:
 
       - name: Upload test artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: rocky-pg19-test-results
           path: |
@@ -351,6 +356,7 @@ jobs:
           sudo apt-get install -y \
             postgresql-server-dev-18 \
             libxerces-c-dev \
+            uuid-dev \
             default-jre-headless \
             cmake \
             ninja-build
@@ -387,6 +393,7 @@ jobs:
         run: |
           set -eux
           export HOMEBREW_NO_AUTO_UPDATE=1
+          brew untap aws/tap || true
           brew install postgresql@18 xerces-c cmake ninja icu4c openjdk@17
 
       - name: Show toolchain versions
