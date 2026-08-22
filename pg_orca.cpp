@@ -65,6 +65,7 @@ bool  optimizer_enable_master_only_queries      = true;
 bool  optimizer_enable_multiple_distinct_aggs   = true;
 bool  optimizer_enable_motions                  = false;
 bool  optimizer_enable_motions_masteronly_queries = true;
+bool  optimizer_enable_query_parameter          = false;
 bool  optimizer_metadata_caching                = true;
 bool  optimizer_use_streaming_hashagg           = false;
 
@@ -859,6 +860,12 @@ void _PG_init(void)
         "optimizer_enable_motions_masteronly_queries",
         "Enable motion nodes for coordinator-only queries.",
         NULL, &optimizer_enable_motions_masteronly_queries, true,
+        PGC_USERSET, 0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "optimizer_enable_query_parameter",
+        "Allow ORCA to plan queries containing external parameters.",
+        NULL, &optimizer_enable_query_parameter, false,
         PGC_USERSET, 0, NULL, NULL, NULL);
 
     DefineCustomBoolVariable(
