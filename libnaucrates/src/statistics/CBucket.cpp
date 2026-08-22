@@ -867,6 +867,16 @@ CBucket::MakeBucketIntersect(CMemoryPool *mp, CBucket *bucket,
 							  : freq_intersect1 * freq_intersect2 *
 									DOUBLE(1.0) / distinct_max);
 
+	// A bucket frequency is a probability, but the expression above divides
+	// two independently rounded doubles and can land just above 1.0.  Two
+	// fully overlapping singleton buckets, for instance, give
+	// 1.0 * 1.0 / 0.99999999999999989 = 1.0000000000000002 when the
+	// per-bucket NDV carries the 1-ULP shortfall left by the divisions that
+	// produced it (TPC-DS Q78).  CBucket's ctor asserts the bound with no
+	// tolerance, so clamp here rather than let a nonsensical frequency
+	// reach the histogram.
+	frequency_new = CDouble(std::min(DOUBLE(1.0), frequency_new.Get()));
+
 
 	lower_new->AddRef();
 	upper_new->AddRef();
