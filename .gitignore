@@ -4,6 +4,7 @@ test/results/
 *.o
 *.so
 *.dylib
+__pycache__/
 .mcp.json
 .claude/
 CLAUDE.md

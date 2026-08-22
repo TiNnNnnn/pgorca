@@ -15,10 +15,6 @@
 LOAD 'pg_orca';
 SET pg_orca.enable_orca = on;
 SET client_min_messages = warning;
-CREATE FUNCTION disable_xform(text) RETURNS text
-    AS 'pg_orca', 'DisableXform' LANGUAGE C STRICT;
-CREATE FUNCTION enable_xform(text) RETURNS text
-    AS 'pg_orca', 'EnableXform' LANGUAGE C STRICT;
 select disable_xform('CXformFullOuterJoin2HashJoin');
               disable_xform               
 ------------------------------------------
@@ -107,5 +103,3 @@ drop table mj_empty;
 drop table mj_real;
 drop table mj_cross;
 drop table mj_part;
-drop function disable_xform(text);
-drop function enable_xform(text);
