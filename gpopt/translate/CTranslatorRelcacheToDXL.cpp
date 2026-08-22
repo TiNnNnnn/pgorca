@@ -2462,7 +2462,26 @@ CTranslatorRelcacheToDXL::TransformStatsToDXLBucketArray(
 		hist_freq = CDouble(1.0) - null_freq - mcv_freq;
 	}
 
-	BOOL has_hist = 1 < num_hist_values && CStatistics::Epsilon < hist_freq;
+	// Text-related types get MCV buckets only.  ORCA's statistics
+	// comparator for varchar/text/bpchar maps a datum to the HashText hash
+	// (CTranslatorScalarToDXL::ExtractLintValueFromDatum), which preserves
+	// equality but not order, so buckets spanning a *range* of string
+	// values are meaningless under it -- roughly half of the buckets built
+	// from pg_stats.histogram_bounds end up with lower > upper once mapped,
+	// which is exactly what CHistogram::IsValid()'s singleton-only rule for
+	// text types is there to catch.  Commit e24f06f dropped this gate to
+	// feed the LIKE estimator, relying on the order-preserving LINT mapping
+	// added the next day (a8a8457); when that mapping was reverted
+	// (e43a13d) the gate was not restored, leaving range buckets ordered by
+	// a hash -- a Debug assertion failure on every text column carrying
+	// both MCVs and a histogram, and silently garbage range/merge
+	// arithmetic in Release.  MCV singleton buckets remain, so LIKE
+	// estimation still matches against the most common values.
+	BOOL is_text_type = mdid_atttype->Equals(&CMDIdGPDB::m_mdid_varchar) ||
+						mdid_atttype->Equals(&CMDIdGPDB::m_mdid_bpchar) ||
+						mdid_atttype->Equals(&CMDIdGPDB::m_mdid_text);
+	BOOL has_hist = !is_text_type && 1 < num_hist_values &&
+					CStatistics::Epsilon < hist_freq;
 
 	CHistogram *histogram = nullptr;
 
@@ -2639,14 +2658,12 @@ CTranslatorRelcacheToDXL::TransformHistToOrcaHistogram(
 					is_upper_closed, freq_per_bucket, distinct_per_bucket);
 		buckets->Append(bucket);
 
-		if (!min_datum->SupportsLikePredicate() &&
-			(!min_datum->StatsAreComparable(max_datum) ||
-			 !min_datum->StatsAreLessThan(max_datum)))
+		if (!min_datum->StatsAreComparable(max_datum) ||
+			!min_datum->StatsAreLessThan(max_datum))
 		{
 			// if less than operation is not supported on this datum,
 			// or the translated histogram does not conform to GPDB sort order (e.g. text column in Linux platform),
 			// then no point building a histogram. return an empty histogram
-			// Exception: string datums (SupportsLikePredicate) are kept for LIKE selectivity estimation.
 
 			// TODO: 03/01/2014 translate histogram into Orca even if sort
 			// order is different in GPDB, and use const expression eval to compare
