@@ -361,6 +361,62 @@ CBucket::MakeBucketScaleUpper(CMemoryPool *mp, CPoint *point_upper_new,
 
 //---------------------------------------------------------------------------
 //	@function:
+//		CBucket::GetFrequencyScaledUpper
+//
+//	@doc:
+//		Frequency that MakeBucketScaleUpper() would put on the scaled-down
+//		bucket, computed without materializing it, so callers that only need
+//		the frequency -- e.g. the merge-join scan fractions in CCostModelPG
+//		-- can avoid allocating a bucket per probe.  Mirrors that function
+//		branch for branch; returns false where it would return NULL, so that
+//		callers add nothing rather than a zero (CDouble floors a zero at
+//		GPOS_FP_ABS_MIN, so "add zero" is not a no-op).  Keep the two in sync.
+//
+//---------------------------------------------------------------------------
+BOOL
+CBucket::GetFrequencyScaledUpper(const CPoint *point_upper_new,
+								 BOOL include_upper, CDouble *frequency) const
+{
+	GPOS_ASSERT(nullptr != point_upper_new);
+	GPOS_ASSERT(nullptr != frequency);
+	GPOS_ASSERT(this->Contains(point_upper_new));
+
+	// scaling upper to be same as lower is identical to producing a singleton
+	if (m_bucket_lower_bound->Equals(point_upper_new) && m_is_lower_closed)
+	{
+		if (!include_upper)
+		{
+			// MakeBucketScaleUpper() returns NULL here: there is no bucket
+			return false;
+		}
+
+		// MakeBucketSingleton()
+		if (IsSingleton())
+		{
+			*frequency = m_frequency;
+			return true;
+		}
+		CDouble ratio = 1 / std::max(1.0, m_distinct.Get());
+		*frequency = m_frequency * ratio;
+		return true;
+	}
+
+	CDouble frequency_new = this->GetFrequency();
+
+	if (!m_bucket_upper_bound->Equals(point_upper_new) ||
+		(this->IsUpperClosed() && !include_upper))
+	{
+		CDouble overlap =
+			this->GetOverlapPercentage(point_upper_new, include_upper);
+		frequency_new = frequency_new * overlap;
+	}
+
+	*frequency = frequency_new;
+	return true;
+}
+
+//---------------------------------------------------------------------------
+//	@function:
 //		CBucket::MakeBucketScaleLower
 //
 //	@doc:

@@ -350,6 +350,13 @@ public:
 	// total frequency from buckets and null fraction
 	CDouble GetFrequency() const;
 
+	// total frequency of the buckets satisfying "col < point" / "col <= point",
+	// i.e. GetFrequency() of the histogram that
+	// MakeHistogramLessThanOrLessThanEqualFilter() would build, computed
+	// without building it
+	CDouble GetFrequencyLessThanOrLessThanEqual(
+		CStatsPred::EStatsCmpType stats_cmp_type, CPoint *point) const;
+
 	// total number of distinct values
 	CDouble GetNumDistinct() const;
 

@@ -2759,11 +2759,17 @@ EstimateMJScanFractions(CExpressionHandle &exprhdl,
 		inner_freq <= CStatistics::Epsilon)
 		return;
 
+	// Frequency ratio of "col cmp point".  This runs inside
+	// CGroupExpression::CostLowerBound, i.e. once per (gexpr, required
+	// props, child cost context) combination, so it must not allocate:
+	// GetFrequencyLessThanOrLessThanEqual() walks the buckets and returns
+	// exactly what MakeHistogramFilter(...)->GetFrequency() would, without
+	// materializing the filtered histogram.
 	auto SelCmp = [](const CHistogram *h, CStatsPred::EStatsCmpType cmp,
 					 CPoint *point) -> DOUBLE {
-		CHistogram *filt = h->MakeHistogramFilter(cmp, point);
-		DOUBLE f = (filt->GetFrequency() / h->GetFrequency()).Get();
-		GPOS_DELETE(filt);
+		DOUBLE f = (h->GetFrequencyLessThanOrLessThanEqual(cmp, point) /
+					h->GetFrequency())
+					   .Get();
 		if (f < 0.0) f = 0.0;
 		if (f > 1.0) f = 1.0;
 		return f;

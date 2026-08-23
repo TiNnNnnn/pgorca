@@ -478,6 +478,99 @@ CHistogram::GetFrequency() const
 	return frequency + m_freq_remaining;
 }
 
+//---------------------------------------------------------------------------
+//	@function:
+//		CHistogram::GetFrequencyLessThanOrLessThanEqual
+//
+//	@doc:
+//		Frequency of the "col < point" / "col <= point" portion of this
+//		histogram -- exactly GetFrequency() of the histogram that
+//		MakeHistogramLessThanOrLessThanEqualFilter() builds, but without
+//		materializing it.  The filtered histogram carries a zero null
+//		frequency, so only the buckets and the scaled-down remainder
+//		contribute; buckets are summed in index order and the boundary
+//		bucket reuses CBucket::GetFrequencyScaledUpper(), which keeps the
+//		result bit-identical to the materializing path.
+//
+//		Buckets are sorted and disjoint, so the predicate "bucket lies
+//		entirely below point" (IsAfter) is monotone over the array: a binary
+//		search finds the first bucket that is not, and everything before it
+//		is included in full.
+//
+//---------------------------------------------------------------------------
+CDouble
+CHistogram::GetFrequencyLessThanOrLessThanEqual(
+	CStatsPred::EStatsCmpType stats_cmp_type, CPoint *point) const
+{
+	GPOS_ASSERT(CStatsPred::EstatscmptL == stats_cmp_type ||
+				CStatsPred::EstatscmptLEq == stats_cmp_type);
+
+	const ULONG num_buckets = m_histogram_buckets->Size();
+
+	// first bucket that is not entirely below point
+	ULONG low = 0;
+	ULONG high = num_buckets;
+	while (low < high)
+	{
+		const ULONG mid = low + (high - low) / 2;
+		if ((*m_histogram_buckets)[mid]->IsAfter(point))
+		{
+			low = mid + 1;
+		}
+		else
+		{
+			high = mid;
+		}
+	}
+
+#ifdef GPOS_DEBUG
+	// the binary search above only works because the bucket array is sorted
+	// under the same comparator IsAfter() uses; verify against the linear
+	// walk MakeHistogramLessThanOrLessThanEqualFilter() performs
+	ULONG linear = 0;
+	while (linear < num_buckets &&
+		   (*m_histogram_buckets)[linear]->IsAfter(point))
+	{
+		linear++;
+	}
+	GPOS_ASSERT(linear == low);
+#endif	// GPOS_DEBUG
+
+	CDouble frequency(0.0);
+	for (ULONG bucket_index = 0; bucket_index < low; bucket_index++)
+	{
+		frequency =
+			frequency + (*m_histogram_buckets)[bucket_index]->GetFrequency();
+	}
+
+	if (low < num_buckets)
+	{
+		CBucket *bucket = (*m_histogram_buckets)[low];
+		CDouble boundary_frequency(0.0);
+		if (bucket->Contains(point) &&
+			bucket->GetFrequencyScaledUpper(
+				point, CStatsPred::EstatscmptLEq == stats_cmp_type,
+				&boundary_frequency))
+		{
+			frequency = frequency + boundary_frequency;
+		}
+	}
+
+	// remainder handling of MakeHistogramLessThanOrLessThanEqualFilter().
+	// GetFrequency() adds the filtered histogram's m_freq_remaining
+	// unconditionally, and CDouble floors a zero at GPOS_FP_ABS_MIN, so the
+	// add has to happen here too even when the remainder is zero -- skipping
+	// it loses that floor and makes this differ from the materializing path
+	// by 1e-250 (numerically inert, but no longer bit-identical).
+	CDouble freq_remaining(0.0);
+	if (CStatistics::Epsilon < m_distinct_remaining * DefaultSelectivity)
+	{
+		freq_remaining = m_freq_remaining * DefaultSelectivity;
+	}
+
+	return frequency + freq_remaining;
+}
+
 // sum of number of distinct values from buckets
 CDouble
 CHistogram::GetNumDistinct() const

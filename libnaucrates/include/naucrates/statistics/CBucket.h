@@ -174,6 +174,12 @@ public:
 	CBucket *MakeBucketScaleUpper(CMemoryPool *mp, CPoint *bucket_upper_bound,
 								  BOOL include_upper) const;
 
+	// frequency MakeBucketScaleUpper() would give the scaled-down bucket,
+	// without materializing it; false (leaving *frequency untouched) where
+	// it would return NULL, i.e. where there is no bucket to account for
+	BOOL GetFrequencyScaledUpper(const CPoint *point_upper_new,
+								 BOOL include_upper, CDouble *frequency) const;
+
 	// scale down version of bucket adjusting lower boundary
 	CBucket *MakeBucketScaleLower(CMemoryPool *mp, CPoint *bucket_lower_bound,
 								  BOOL include_lower) const;
