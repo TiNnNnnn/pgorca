@@ -1,0 +1,111 @@
+-- pg_orca ordered-set aggregate regression test
+-- Ported from Apache Cloudberry src/test/regress/sql/percentile.sql
+-- (commit b1e80d9 "fix(orca): avoid crash on ordered-set aggregate without
+-- direct args")
+LOAD 'pg_orca';
+SET pg_orca.enable_orca = on;
+SET client_min_messages = warning;
+CREATE TABLE perct (a int, b int);
+INSERT INTO perct SELECT i, i / 10 FROM generate_series(1, 100) i;
+ANALYZE perct;
+-- mode() is the only built-in ordered-set aggregate with no direct argument.
+-- CUtils::FHasOrderedAggToSplit used to dereference the (empty) direct-args
+-- child unconditionally, which tripped a GPOS_ASSERT in Debug builds and
+-- segfaulted in Release builds during ORCA preprocessing.  ORCA must plan
+-- mode() as a plain ordered-set aggregate instead of trying to split it into
+-- the gp_percentile rewrite.
+explain (costs off) select mode() within group (order by b) from perct;
+       QUERY PLAN        
+-------------------------
+ Aggregate
+   ->  Seq Scan on perct
+ Optimizer: pg_orca
+(3 rows)
+
+select mode() within group (order by b) from perct;
+ mode 
+------
+    1
+(1 row)
+
+select b, mode() within group (order by a) from perct group by b order by b;
+ b  | mode 
+----+------
+  0 |    1
+  1 |   10
+  2 |   20
+  3 |   30
+  4 |   40
+  5 |   50
+  6 |   60
+  7 |   70
+  8 |   80
+  9 |   90
+ 10 |  100
+(11 rows)
+
+-- Mix mode() with a splittable percentile and a regular aggregate.
+select mode() within group (order by b),
+	percentile_cont(0.6) within group (order by a), count(*) from perct;
+ mode | percentile_cont | count 
+------+-----------------+-------
+    1 |            60.4 |   100
+(1 row)
+
+select b, mode() within group (order by a),
+	percentile_cont(0.5) within group (order by a), count(*) from perct group by b order by b;
+ b  | mode | percentile_cont | count 
+----+------+-----------------+-------
+  0 |    1 |               5 |     9
+  1 |   10 |            14.5 |    10
+  2 |   20 |            24.5 |    10
+  3 |   30 |            34.5 |    10
+  4 |   40 |            44.5 |    10
+  5 |   50 |            54.5 |    10
+  6 |   60 |            64.5 |    10
+  7 |   70 |            74.5 |    10
+  8 |   80 |            84.5 |    10
+  9 |   90 |            94.5 |    10
+ 10 |  100 |             100 |     1
+(11 rows)
+
+-- mode() over empty input, over a grouped key, and with a filter.
+select mode() within group (order by a) from perct where a < 0;
+ mode 
+------
+     
+(1 row)
+
+select a % 2 as parity, mode() within group (order by b) from perct group by a % 2 order by parity;
+ parity | mode 
+--------+------
+      0 |    1
+      1 |    0
+(2 rows)
+
+select mode() within group (order by a) filter (where b = 3) from perct;
+ mode 
+------
+   30
+(1 row)
+
+-- mode() over a text column (no direct arg, non-numeric sort key).
+create table perct_text (a int, b text);
+insert into perct_text select i, 'v' || (i % 7) from generate_series(1, 50) i;
+analyze perct_text;
+select mode() within group (order by b) from perct_text;
+ mode 
+------
+ v1
+(1 row)
+
+select a % 3 as g, mode() within group (order by b) from perct_text group by a % 3 order by g;
+ g | mode 
+---+------
+ 0 | v3
+ 1 | v0
+ 2 | v1
+(3 rows)
+
+drop table perct_text;
+drop table perct;

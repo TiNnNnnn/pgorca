@@ -4671,7 +4671,8 @@ CUtils::FHasAggWindowFunc(CExpression *pexpr)
 }
 
 
-// returns true if expression contains ordered aggregate function
+// returns true if expression contains an ordered aggregate function that
+// should be split to an internal gp_percentile aggregate
 BOOL
 CUtils::FHasOrderedAggToSplit(CExpression *pexpr)
 {
@@ -4682,26 +4683,29 @@ CUtils::FHasOrderedAggToSplit(CExpression *pexpr)
 	{
 		return false;
 	}
+
 	// CScalarAggFunc has 4 children: [0]=args, [1]=direct args, [2]=order
-	// args, [3]=qual.  This check requires the regular-args list [0] and
-	// the direct-args list [1] to each have at least one expression — we
-	// peek at the first element of both below.  Ordered-set aggregates
-	// like mode() take NO direct args (only WITHIN GROUP args), so [1] is
-	// empty for them and the (*(*pexpr)[1])[0] access used to segfault.
-	// Treat those as "no ordered-agg to split" — splitting only applies
-	// to fractile aggs like percentile_cont(<expr>) where the direct arg
-	// can be a non-const expression.
-	CExpression *pexprArgs = (*pexpr)[0];
-	CExpression *pexprDirectArgs = (*pexpr)[1];
-	if (nullptr == pexprArgs || pexprArgs->Arity() == 0 ||
-		nullptr == pexprDirectArgs || pexprDirectArgs->Arity() == 0)
+	// args, [3]=qual.  Both this check and COrderedAggPreprocessor peek at
+	// the first element of the args, direct-args and order lists, so all
+	// three must be non-empty.  Ordered-set aggregates like mode() take NO
+	// direct args (only WITHIN GROUP args), so [1] is empty for them and
+	// the (*(*pexpr)[1])[0] access used to segfault.  Treat those as "no
+	// ordered-agg to split" — splitting only applies to fractile aggs like
+	// percentile_cont(<expr>) where the direct arg can be a non-const
+	// expression.
+	if (pexpr->Arity() <= EaggfuncIndexOrder ||
+		(*pexpr)[EaggfuncIndexArgs]->Arity() == 0 ||
+		(*pexpr)[EaggfuncIndexDirectArgs]->Arity() == 0 ||
+		(*pexpr)[EaggfuncIndexOrder]->Arity() == 0)
 	{
 		return false;
 	}
-	return (!FScalarConst((*pexprDirectArgs)[0]) ||
-			!FIsConstArray((*pexprDirectArgs)[0])) &&
-		   (FScalarIdent((*pexprArgs)[0]) ||
-			CScalarIdent::FCastedScId((*pexprArgs)[0]));
+
+	CExpression *pexprArg = (*(*pexpr)[EaggfuncIndexArgs])[0];
+	CExpression *pexprDirectArg = (*(*pexpr)[EaggfuncIndexDirectArgs])[0];
+
+	return (!FScalarConst(pexprDirectArg) || !FIsConstArray(pexprDirectArg)) &&
+		   (FScalarIdent(pexprArg) || CScalarIdent::FCastedScId(pexprArg));
 }
 
 BOOL
