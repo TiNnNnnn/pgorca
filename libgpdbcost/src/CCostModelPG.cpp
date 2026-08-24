@@ -1157,9 +1157,12 @@ CCostModelPG::CostNLJoin(CMemoryPool *mp,
 		// amortization at the actual outer cardinality.  ORCA's CostIndexScan
 		// runs with NumRebinds=1 (CJoinStatsProcessor.cpp:682 deliberately
 		// keeps inner-side rebinds at the default), so the inner_total_cost
-		// stored in pci->PdCost()[1] is a single-shot value.
-		per_exec += ComputeIndexScanIOAmortizationDelta(
-			inner_op, inner_rows, outer_rows);
+		// stored in pci->PdCost()[1] is a single-shot value. The group walk can
+		// expose a different index implementation than the selected child plan,
+		// so the estimated IO discount must not exceed that plan's probe cost.
+		per_exec = std::max(
+			0.0, per_exec + ComputeIndexScanIOAmortizationDelta(
+							  inner_op, inner_rows, outer_rows));
 
 		if (has_indexed_join_quals)
 		{
@@ -1197,8 +1200,9 @@ CCostModelPG::CostNLJoin(CMemoryPool *mp,
 		{
 			DOUBLE per_exec = inner_total_cost / inner_rebinds;
 			// IO amortization: see SEMI branch comment.
-			per_exec += ComputeIndexScanIOAmortizationDelta(
-				inner_op, inner_rows, outer_rows);
+			per_exec = std::max(
+				0.0, per_exec + ComputeIndexScanIOAmortizationDelta(
+								  inner_op, inner_rows, outer_rows));
 			extra_rescan = n_extra * per_exec;
 		}
 	}
