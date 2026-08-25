@@ -12,7 +12,39 @@ A PostgreSQL 18 / 19 extension that plugs the **ORCA query optimizer** (original
 
 ## Overview
 
-ORCA is a cost-based, rule-driven query optimizer that operates on an intermediate representation called DXL (Data eXchange Language). It was designed for massively-parallel processing (MPP) databases but contains a powerful optimization engine that is useful in single-node mode as well.
+ORCA is a **Cascades-style** cost-based optimizer: instead of a fixed bottom-up
+dynamic-programming pass, it stores all equivalent plan alternatives in a memo and
+explores them by firing transformation rules (*xforms*), so logical rewrites and
+physical implementation choices are made together and priced by the same cost model.
+It operates on an intermediate representation called DXL (Data eXchange Language). It
+was designed for massively-parallel processing (MPP) databases but contains a powerful
+optimization engine that is useful in single-node mode as well.
+
+That architecture lets ORCA address several known limits of the built-in PostgreSQL
+planner:
+
+- **Correlated subqueries.** PG pulls up only a limited set of sublink shapes; the
+  rest stay as SubPlans re-executed per outer row. ORCA models them as `Apply` and
+  decorrelates them into regular joins through xforms, so the subquery side
+  participates in join ordering and costing like any other relation.
+- **Join ordering beyond the collapse limits.** PG stops exhaustive search at
+  `join_collapse_limit`/`from_collapse_limit` (8 by default) and falls back to the
+  syntactic order or GEQO. ORCA enumerates join orders as part of the search itself
+  (`optimizer_join_order`: `exhaustive2` by default, or `exhaustive` / `greedy` /
+  `query`), with `pg_orca.join_order_dynamic_threshold` downshifting to a cheaper
+  strategy only when the query is genuinely large.
+- **Rewrites the planner does not attempt.** Eager aggregation (pushing a `GROUP BY`
+  below a join), CTE inlining as a *cost-based* decision rather than a syntactic rule,
+  aggregate splitting, and inferred/transitive predicates pushed across join
+  boundaries.
+- **Unified search space.** Because rewriting and implementation live in the same
+  memo, a rewrite that only pays off with a particular physical shape (index scan,
+  merge join, partition pruning) can be chosen on cost instead of being applied — or
+  skipped — ahead of the plan search.
+
+The trade-off is planning time: exploring the full space costs more than PG's planner,
+which is why ORCA is opt-in per session and any query it cannot handle falls back to
+the standard planner automatically.
 
 This project extracts ORCA's four core libraries and the PostgreSQL integration layer from Apache Cloudberry, adapts them for PG18 and PG19, and packages the result as a `CREATE EXTENSION`-installable plugin.
 
