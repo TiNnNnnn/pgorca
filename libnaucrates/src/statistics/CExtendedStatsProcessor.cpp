@@ -277,6 +277,16 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation(
 		{
 			ULONG colid = child_pred->GetColId();
 			INT *attnum = colid_to_attno_mapping->Find(&colid);
+			if (nullptr == attnum)
+			{
+				/*
+				 * Unlike the backend, ORCA has to translate its column ids
+				 * back to attnos and the mapping is not guaranteed to cover
+				 * every column of the statistics object. Skip such clauses;
+				 * they fall back to the independence assumption.
+				 */
+				continue;
+			}
 			clauses_attnums->ExchangeSet(*attnum);
 		}
 	}
@@ -353,6 +363,11 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation(
 
 			ULONG colid = child_pred->GetColId();
 			INT *attnum = colid_to_attno_mapping->Find(&colid);
+			if (nullptr == attnum)
+			{
+				/* no colid -> attno mapping for this clause; see above */
+				continue;
+			}
 
 			/*
 			 * Technically we could find more than one clause for a given
@@ -365,7 +380,23 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation(
 			 */
 			if (dependency_implies_attribute(dependency, *attnum))
 			{
-				s2 = 1 / result_histograms->Find(&colid)->GetFrequency().Get();
+				const CHistogram *histogram = result_histograms->Find(&colid);
+				if (nullptr == histogram)
+				{
+					/*
+					 * No histogram to estimate the implied clause with; give
+					 * up on the dependency for this attribute. The attnum
+					 * bit must still be cleared: the outer loop terminates
+					 * only once no dependency is fully matched by the
+					 * remaining attnums, so leaving the bit set would make
+					 * find_strongest_dependency() return the same dependency
+					 * forever. The clause stays unestimated and is handled
+					 * by the regular per-column path later.
+					 */
+					clauses_attnums->ExchangeClear(*attnum);
+					continue;
+				}
+				s2 = 1 / histogram->GetFrequency().Get();
 
 				/* mark this one as done, so we don't touch it again. */
 				child_pred->SetEstimated();
@@ -512,6 +543,14 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToNDistinctCalculation(
 				item = tmpitem;
 				break;
 			}
+		}
+
+		if (nullptr == item)
+		{
+			/* there should be an item for every attribute combination */
+			matched->Release();
+			attnums->Release();
+			return false;
 		}
 
 		/* Form the output varinfo list, keeping only unmatched ones */

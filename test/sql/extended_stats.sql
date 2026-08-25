@@ -1,0 +1,40 @@
+-- pg_orca extended-statistics regression tests
+-- Ported from warehouse-pg PR #251
+
+LOAD 'pg_orca';
+SET pg_orca.enable_orca = on;
+SET client_min_messages = warning;
+
+-- Filter estimation with extended statistics must not crash when the memo
+-- group's cached stats were extended incrementally (histograms appended for
+-- columns that the colid -> attno mapping initially lacked). The ROLLUP is
+-- expanded into a CTE whose consumers request different column sets, so the
+-- stats of the dimension table's scan group get appended with the filter
+-- column after the initial derivation.
+DROP TABLE IF EXISTS extstats_fact, extstats_dim;
+CREATE TABLE extstats_dim (d_sk int, d_filter int, d_a int, d_b int, d_c int);
+CREATE TABLE extstats_fact (f_sk int, f_val int);
+INSERT INTO extstats_dim SELECT g, g % 20, g % 3, g % 4, g % 5 FROM generate_series(1, 100) g;
+INSERT INTO extstats_fact SELECT g % 100 + 1, g FROM generate_series(1, 1000) g;
+CREATE STATISTICS extstats_dim_nd (ndistinct) ON d_a, d_b, d_c FROM extstats_dim;
+ANALYZE extstats_dim;
+ANALYZE extstats_fact;
+
+SELECT count(*) FROM (
+  SELECT d_a, d_b, d_c, sum(f_val) s
+  FROM extstats_fact, extstats_dim
+  WHERE f_sk = d_sk AND d_filter BETWEEN 5 AND 10
+  GROUP BY ROLLUP(d_a, d_b, d_c)) x;
+
+-- same query, but with a dependencies object so the filter goes through the
+-- functional-dependency path of the extended-stats estimator as well
+CREATE STATISTICS extstats_dim_dep (dependencies) ON d_filter, d_a, d_b FROM extstats_dim;
+ANALYZE extstats_dim;
+
+SELECT count(*) FROM (
+  SELECT d_a, d_b, d_c, sum(f_val) s
+  FROM extstats_fact, extstats_dim
+  WHERE f_sk = d_sk AND d_filter = 7 AND d_a = 1 AND d_b = 3
+  GROUP BY ROLLUP(d_a, d_b, d_c)) x;
+
+DROP TABLE extstats_fact, extstats_dim;

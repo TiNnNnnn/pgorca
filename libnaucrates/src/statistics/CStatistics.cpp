@@ -552,6 +552,25 @@ CStatistics::AppendStats(CMemoryPool *mp, IStatistics *input_stats)
 	CStatisticsUtils::AddWidthInfo(mp, stats->m_colid_width_mapping,
 								   m_colid_width_mapping);
 	GPOS_CHECK_ABORT;
+
+	// Also merge the colid -> attno mapping so that every column that has a
+	// histogram keeps an attno entry; extended-stats estimation relies on
+	// this invariant. The mapping may be shared with other stats objects
+	// (see ScaleStats()), so merge copy-on-write instead of mutating it.
+	if (0 < stats->m_colid_to_attno_mapping->Size())
+	{
+		UlongToIntMap *attnos_new = GPOS_NEW(mp) UlongToIntMap(mp);
+		AddAttnoInfo(mp, m_colid_to_attno_mapping, attnos_new);
+		AddAttnoInfo(mp, stats->m_colid_to_attno_mapping, attnos_new);
+		m_colid_to_attno_mapping->Release();
+		m_colid_to_attno_mapping = attnos_new;
+	}
+
+	if (nullptr == m_ext_stats)
+	{
+		m_ext_stats = stats->m_ext_stats;
+	}
+	GPOS_CHECK_ABORT;
 }
 
 // copy statistics object
@@ -764,6 +783,27 @@ CStatistics::AddAttnoInfoWithRemap(CMemoryPool *mp, UlongToIntMap *src_attno,
 		{
 			colid = new_colref->Id();
 		}
+
+		if (nullptr == dest_attno->Find(&colid))
+		{
+			const INT *attno = col_attno_map_iterator.Value();
+			INT *attno_copy = GPOS_NEW(mp) INT(*attno);
+			BOOL result GPOS_ASSERTS_ONLY =
+				dest_attno->Insert(GPOS_NEW(mp) ULONG(colid), attno_copy);
+			GPOS_ASSERT(result);
+		}
+	}
+}
+
+// add attno information without remapping
+void
+CStatistics::AddAttnoInfo(CMemoryPool *mp, UlongToIntMap *src_attno,
+						  UlongToIntMap *dest_attno)
+{
+	UlongToIntMapIter col_attno_map_iterator(src_attno);
+	while (col_attno_map_iterator.Advance())
+	{
+		ULONG colid = *(col_attno_map_iterator.Key());
 
 		if (nullptr == dest_attno->Find(&colid))
 		{
