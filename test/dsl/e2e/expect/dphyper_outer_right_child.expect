@@ -1,5 +1,5 @@
 {
-  "description": "DPHyper preserves FullOuter semantics and freezes its unsafe adjacent InnerJoin cut",
+  "description": "CD-C keeps the legal right-side Inner subtree of A LeftOuter (B Inner C) and rejects the unsafe opposite cut",
   "plans": [
     {
       "name": "replacement",
@@ -9,14 +9,15 @@
       "trace": true,
       "contains": [
         "DPHyper: status=applied",
-        "root=CLogicalInnerJoin nodes=3",
+        "root=CLogicalLeftOuterJoin nodes=3",
         "pairs=2 subsets=5",
         "mode=replacement",
-        "Xform: CXformFullOuterJoin2HashJoin"
+        "Xform: CXformLeftOuterJoin2HashJoin"
       ],
       "not_contains": [
         "Xform: CXformExpandNAryJoinDPv2",
-        "Xform: CXformFullJoinCommutativity"
+        "Xform: CXformJoinAssociativity",
+        "Xform: CXformLeftJoin2RightJoin"
       ],
       "joins": 2
     }
@@ -29,14 +30,14 @@
       "1,1,1",
       "2,2,2",
       "2,2,2",
-      "3,,3"
+      "3,,"
     ],
     "postgres_output": [
       "1,1,1",
       "1,1,1",
       "2,2,2",
       "2,2,2",
-      "3,,3"
+      "3,,"
     ]
   }
 }
