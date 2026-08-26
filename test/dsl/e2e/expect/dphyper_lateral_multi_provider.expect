@@ -1,5 +1,5 @@
 {
-  "description": "DPHyper models a non-decorrelatable LATERAL atom as a directed sibling dependency and never builds it before its provider",
+  "description": "A LATERAL atom with two sibling providers is only enumerable after the complete provider subset exists",
   "plans": [
     {
       "name": "replacement",
@@ -10,8 +10,8 @@
       "contains": [
         "DPHyper: status=applied",
         "root=CLogicalInnerJoin nodes=3",
-        "dependencies=1",
-        "pairs=4 subsets=6",
+        "dependencies=2",
+        "pairs=2 subsets=5",
         "mode=replacement"
       ],
       "not_contains": [
