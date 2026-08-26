@@ -1,5 +1,5 @@
 {
-  "description": "DPHyper preserves FullOuter semantics and freezes its unsafe adjacent InnerJoin cut",
+  "description": "CD-C freezes a null-supplying LeftOuter subtree when the adjacent InnerJoin is not null rejecting",
   "plans": [
     {
       "name": "replacement",
@@ -12,11 +12,13 @@
         "root=CLogicalInnerJoin nodes=3",
         "pairs=2 subsets=5",
         "mode=replacement",
-        "Xform: CXformFullOuterJoin2HashJoin"
+        "Xform: CXformLeftOuterJoin2HashJoin"
       ],
       "not_contains": [
         "Xform: CXformExpandNAryJoinDPv2",
-        "Xform: CXformFullJoinCommutativity"
+        "Xform: CXformInnerJoinCommutativity",
+        "Xform: CXformJoinAssociativity",
+        "Xform: CXformLeftJoin2RightJoin"
       ],
       "joins": 2
     }

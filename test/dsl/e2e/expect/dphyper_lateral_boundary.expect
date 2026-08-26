@@ -1,5 +1,5 @@
 {
-  "description": "DPHyper preserves FullOuter semantics and freezes its unsafe adjacent InnerJoin cut",
+  "description": "DPHyper models a non-decorrelatable LATERAL atom as a directed sibling dependency and never builds it before its provider",
   "plans": [
     {
       "name": "replacement",
@@ -10,13 +10,14 @@
       "contains": [
         "DPHyper: status=applied",
         "root=CLogicalInnerJoin nodes=3",
-        "pairs=2 subsets=5",
-        "mode=replacement",
-        "Xform: CXformFullOuterJoin2HashJoin"
+        "pairs=4 subsets=6",
+        "mode=replacement"
       ],
       "not_contains": [
+        "DPHyper: status=fallback reason=lateral_dependency",
         "Xform: CXformExpandNAryJoinDPv2",
-        "Xform: CXformFullJoinCommutativity"
+        "Xform: CXformInnerJoinCommutativity",
+        "Xform: CXformJoinAssociativity"
       ],
       "joins": 2
     }
@@ -27,16 +28,12 @@
     "output": [
       "1,1,1",
       "1,1,1",
-      "2,2,2",
-      "2,2,2",
-      "3,,3"
+      "2,2,2"
     ],
     "postgres_output": [
       "1,1,1",
       "1,1,1",
-      "2,2,2",
-      "2,2,2",
-      "3,,3"
+      "2,2,2"
     ]
   }
 }
