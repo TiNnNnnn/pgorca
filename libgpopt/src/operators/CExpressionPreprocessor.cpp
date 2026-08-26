@@ -3524,7 +3524,8 @@ CExpressionPreprocessor::PexprPreprocess(
 			->FEnableDPHyper())
 	{
 		pexprCollapsed =
-			CJoinRegionSpec::PexprMarkDPHyperRegions(mp, pexprLOJToIJ);
+			CJoinRegionSpec::PexprMarkDPHyperRegions(
+				mp, pexprLOJToIJ, true /*include complex*/);
 	}
 	else
 	{
