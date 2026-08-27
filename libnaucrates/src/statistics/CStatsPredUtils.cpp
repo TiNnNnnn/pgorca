@@ -1351,6 +1351,41 @@ CStatsPredUtils::ExtractJoinStatsFromJoinPredArray(
 	CStatsPred **unsupported_stats_pred_array)
 {
 	GPOS_ASSERT(nullptr != scalar_expr);
+
+	// extract all the conjuncts
+	CExpressionArray *expr_conjuncts =
+		CPredicateUtils::PdrgpexprConjuncts(mp, scalar_expr);
+
+	CStatsPredJoinArray *join_preds_stats =
+		ExtractJoinStatsFromJoinPredConjuncts(
+			mp, expr_conjuncts, output_col_refsets, outer_refs,
+			is_semi_or_antijoin, unsupported_stats_pred_array);
+
+	expr_conjuncts->Release();
+
+	return join_preds_stats;
+}
+
+
+//---------------------------------------------------------------------------
+//	@function:
+//		CStatsPredUtils::ExtractJoinStatsFromJoinPredConjuncts
+//
+//	@doc:
+//		Helper function to extract array of statistics join filter
+//		from an array of conjuncts of join predicates; does not assume
+//		ownership of the conjunct array
+//
+//---------------------------------------------------------------------------
+CStatsPredJoinArray *
+CStatsPredUtils::ExtractJoinStatsFromJoinPredConjuncts(
+	CMemoryPool *mp, CExpressionArray *expr_conjuncts,
+	CColRefSetArray *
+		output_col_refsets,	 // array of output columns of join's relational inputs
+	CColRefSet *outer_refs, BOOL is_semi_or_antijoin,
+	CStatsPred **unsupported_stats_pred_array)
+{
+	GPOS_ASSERT(nullptr != expr_conjuncts);
 	GPOS_ASSERT(nullptr != output_col_refsets);
 
 	CStatsPredJoinArray *join_preds_stats =
@@ -1359,9 +1394,6 @@ CStatsPredUtils::ExtractJoinStatsFromJoinPredArray(
 	CExpressionArray *unsupported_expr_array =
 		GPOS_NEW(mp) CExpressionArray(mp);
 
-	// extract all the conjuncts
-	CExpressionArray *expr_conjuncts =
-		CPredicateUtils::PdrgpexprConjuncts(mp, scalar_expr);
 	const ULONG size = expr_conjuncts->Size();
 	for (ULONG ul = 0; ul < size; ul++)
 	{
@@ -1393,7 +1425,6 @@ CStatsPredUtils::ExtractJoinStatsFromJoinPredArray(
 
 	// clean up
 	unsupported_expr_array->Release();
-	expr_conjuncts->Release();
 
 	return join_preds_stats;
 }
