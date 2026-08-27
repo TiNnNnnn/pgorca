@@ -3012,6 +3012,42 @@ CTranslatorRelcacheToDXL::IsIndexSupported(Relation index_rel)
 							GIST_AM_OID == index_rel->rd_rel->relam ||
 							GIN_AM_OID == index_rel->rd_rel->relam ||
 							BRIN_AM_OID == index_rel->rd_rel->relam);
+
+	// ORCA's metadata and DXL carry no collation information -- a limitation
+	// dating back to the PG 9.1 merge (the "GPDB_91_MERGE_FIXME: collation"
+	// sites, e.g. gpdb::TypeCollation()): every index qual ORCA produces is
+	// reconstructed with the default collation of the TABLE column's type.
+	// An index keyed on any other collation is ordered by a different
+	// comparator, so scanning it with such quals silently misses rows. Hide
+	// these indexes from ORCA, just like the planner refuses them for
+	// default-collation predicates. The comparison must use the table
+	// column's type, not the index attribute's: the index stores a different
+	// type for some opclasses (btree name_ops stores cstring, hash indexes
+	// store the int4 hash code) while indcollation still carries the column's
+	// collation. Remove this once ORCA carries collations through DXL.
+	if (index_supported)
+	{
+		gpdb::RelationWrapper table_rel =
+			gpdb::GetRelation(index_rel->rd_index->indrelid);
+
+		for (int i = 0; i < index_rel->rd_index->indnkeyatts; i++)
+		{
+			Oid indcollation = index_rel->rd_indcollation[i];
+			// expression keys were rejected above, so this is a plain column
+			AttrNumber attno = index_rel->rd_index->indkey.values[i];
+
+			if (OidIsValid(indcollation) &&
+				indcollation !=
+					gpdb::TypeCollation(
+						TupleDescAttr(table_rel->rd_att, attno - 1)
+							->atttypid))
+			{
+				index_supported = false;
+				break;
+			}
+		}
+	}
+
 	if (index_supported)
 	{
 		return true;
