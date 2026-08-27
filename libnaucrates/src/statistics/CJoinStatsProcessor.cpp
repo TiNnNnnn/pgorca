@@ -17,9 +17,7 @@
 #include "gpopt/base/COptCtxt.h"
 #include "gpopt/base/CPropConstraint.h"
 #include "gpopt/operators/CLogicalIndexApply.h"
-#include "gpopt/operators/CLogicalNAryJoin.h"
 #include "gpopt/operators/CPredicateUtils.h"
-#include "gpopt/operators/CScalarNAryJoinPredList.h"
 #include "gpopt/optimizer/COptimizerConfig.h"
 #include "naucrates/md/CMDForeignKey.h"
 #include "naucrates/md/CMDIdRelStats.h"
@@ -175,10 +173,6 @@ CJoinStatsProcessor::CalcAllJoinStats(CMemoryPool *mp,
 	const ULONG num_stats = statistics_array->Size();
 	IStatistics *stats = (*statistics_array)[0]->CopyStats(mp);
 	CDouble num_rows_outer = stats->Rows();
-	// predicate indexes, if we have a mix of inner and LOJs
-	ULongPtrArray *predIndexes = nullptr;
-	CExpression *inner_or_simple_2_way_loj_preds = expr;
-
 	switch (pop->Eopid())
 	{
 		case COperator::EopLogicalIndexApply:
@@ -188,18 +182,6 @@ CJoinStatsProcessor::CalcAllJoinStats(CMemoryPool *mp,
 
 		case COperator::EopLogicalLeftOuterJoin:
 			left_outer_2_way_join = true;
-			break;
-
-		case COperator::EopLogicalNAryJoin:
-			predIndexes =
-				CLogicalNAryJoin::PopConvert(pop)->GetLojChildPredIndexes();
-			if (nullptr != predIndexes)
-			{
-				GPOS_ASSERT(COperator::EopScalarNAryJoinPredList ==
-							expr->Pop()->Eopid());
-				inner_or_simple_2_way_loj_preds =
-					(*expr)[GPOPT_ZERO_INNER_JOIN_PRED_INDEX];
-			}
 			break;
 
 		default:
@@ -216,19 +198,7 @@ CJoinStatsProcessor::CalcAllJoinStats(CMemoryPool *mp,
 
 		CStatsPred *unsupported_pred_stats = nullptr;
 		BOOL is_a_left_join = left_outer_2_way_join;
-		CExpression *join_preds_available = nullptr;
-
-		if (nullptr == predIndexes ||
-			GPOPT_ZERO_INNER_JOIN_PRED_INDEX == *(*predIndexes)[i])
-		{
-			join_preds_available = inner_or_simple_2_way_loj_preds;
-		}
-		else
-		{
-			// this is an LOJ that is part of an NAry join, get the corresponding ON predicate
-			is_a_left_join = true;
-			join_preds_available = (*expr)[*(*predIndexes)[i]];
-		}
+		CExpression *join_preds_available = expr;
 
 		CStatsPredJoinArray *join_preds_stats =
 			CStatsPredUtils::ExtractJoinStatsFromJoinPredArray(
@@ -1018,7 +988,6 @@ CJoinStatsProcessor::DeriveJoinStats(CMemoryPool *mp,
 	COperator::EOperatorId op_id = exprhdl.Pop()->Eopid();
 	GPOS_ASSERT(COperator::EopLogicalLeftOuterJoin == op_id ||
 				COperator::EopLogicalInnerJoin == op_id ||
-				COperator::EopLogicalNAryJoin == op_id ||
 				COperator::EopLogicalFullOuterJoin == op_id ||
 				COperator::EopLogicalRightOuterJoin == op_id);
 #endif

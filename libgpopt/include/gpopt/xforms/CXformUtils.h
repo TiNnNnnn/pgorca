@@ -291,10 +291,6 @@ public:
 	static CXform::EXformPromise ExfpSemiJoin2CrossProduct(
 		CExpressionHandle &exprhdl);
 
-	// check the applicability of N-ary join expansion
-	static CXform::EXformPromise ExfpExpandJoinOrder(CExpressionHandle &exprhdl,
-													 const CXform *xform);
-
 	// extract foreign key
 	static CColRefSet *PcrsFKey(CMemoryPool *mp, CExpression *pexprOuter,
 								CExpression *pexprInner,
@@ -422,7 +418,6 @@ public:
 			   CXform::ExfProject2Apply == exfid ||
 			   CXform::ExfGbAgg2Apply == exfid ||
 			   CXform::ExfSubqJoin2Apply == exfid ||
-			   CXform::ExfSubqNAryJoin2Apply == exfid ||
 			   CXform::ExfSequenceProject2Apply == exfid;
 	}
 
