@@ -4780,9 +4780,16 @@ CTranslatorExprToDXL::PdxlnMergeJoin(CExpression *pexprMJ,
 	for (ULONG ul = 0; ul < length; ul++)
 	{
 		CExpression *pexprPred = (*pdrgpexprPredicates)[ul];
-		// At this point, they all better be merge joinable
-		GPOS_ASSERT(CPhysicalJoin::FMergeJoinCompatible(
-			pexprPred, pexprOuterChild, pexprInnerChild));
+		// At this point, they all better be merge joinable.  Note that
+		// FMergeJoinCompatible() is the *first-build* gate in
+		// CXformUtils::ImplementMergeJoin and only accepts a bare
+		// `scId = scId`.  The join-key cache path in the same function
+		// admits more: it strips binary-coercible casts (and INDF) via
+		// AlignJoinKeyOuterInner and then requires the *aligned* keys to
+		// be plain ScalarIdents.  Assert that weaker, actually-enforced
+		// invariant here -- see the aligned-key check below.
+		GPOS_ASSERT(CPredicateUtils::IsEqualityOp(pexprPred) ||
+					CPredicateUtils::FINDF(pexprPred));
 
 		// Extract the two key columns out of pexprPred.  Plain equality
 		// is `a = b` (binary ScalarCmp) but NULL-safe equality (INDF) is
@@ -4807,6 +4814,9 @@ CTranslatorExprToDXL::PdxlnMergeJoin(CExpression *pexprMJ,
 		GPOS_ASSERT(pcrsOuterChild->ContainsAll(pcrsPredOuter) &&
 					pcrsInnerChild->ContainsAll(pcrsPredInner) &&
 					"merge join keys are not aligned with children");
+		GPOS_ASSERT(CUtils::FScalarIdent(pexprPredOuter) &&
+					CUtils::FScalarIdent(pexprPredInner) &&
+					"merge join keys must be plain scalar idents");
 #endif
 
 		// Build the merge cond DXL node based on the original predicate
