@@ -1,10 +1,10 @@
 {
-  "description": "A proved DSL rule replaces the single-key equality branch of LeftSemiJoin2InnerJoin",
+  "description": "The proved SemiJoin replacement preserves a computed inner key",
   "replacement": {
     "xforms": [
       "CXformLeftSemiJoin2InnerJoin"
     ],
-    "scope": "Projected single-key equality semi-join, including nullable keys",
+    "scope": "Single computed equality key",
     "status": "verified_partial_replacement",
     "dsl_rule_hashes": [
       "9dc5c70cd1245677"
@@ -60,13 +60,9 @@
       "CXformLeftSemiJoin2InnerJoin"
     ],
     "output": [
-      "1",
-      "1",
       "2"
     ],
     "postgres_output": [
-      "1",
-      "1",
       "2"
     ]
   }
