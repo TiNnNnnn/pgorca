@@ -1,11 +1,11 @@
 {
-  "description": "A proved nested-dedup rule replaces pure-dedup GbAgg collapse for equal grouping columns",
+  "description": "A proved DSL rule replaces pure-dedup GbAgg collapse when the outer grouping is a strict subset",
   "replacement": {
     "xforms": [
       "CXformCollapseGbAgg"
     ],
-    "scope": "cascaded pure-dedup grouping with equal grouping columns",
-    "status": "verified_partial_replacement",
+    "scope": "all grouping-subset branches; equal-grouping and aggregate/local guards are covered by companion cases",
+    "status": "verified_full_replacement",
     "dsl_rule_hashes": [
       "81e937ce3b542473"
     ]
@@ -27,8 +27,7 @@
       ],
       "alternative": [
         "CXformCollapseGbAgg",
-        "CXformDSLRule_Agg",
-        "CXformDSLRule_Project"
+        "CXformDSLRule_Agg"
       ]
     },
     {
@@ -52,8 +51,7 @@
         "\"status\":\"applied\",\"rule_hash\":\"81e937ce3b542473\""
       ],
       "alternative": [
-        "CXformDSLRule_Agg",
-        "CXformDSLRule_Project"
+        "CXformDSLRule_Agg"
       ]
     }
   ],
