@@ -1,13 +1,13 @@
 {
-  "description": "A proved DSL rule pushes nullable foreign-key grouping attrs below an inner join with a residual predicate",
+  "description": "A proved DSL rule pushes nullable foreign-key subset grouping below an inner join",
   "replacement": {
     "xforms": [
-      "CXformPushGbDedupBelowJoin"
+      "CXformPushGbBelowJoin"
     ],
-    "scope": "Outer grouping attrs contain a nullable FK and every outer residual dependency",
+    "scope": "Pure outer grouping attrs contain a nullable FK joined to a unique referred key",
     "status": "verified_partial_replacement",
     "dsl_rule_hashes": [
-      "dc768bb1f1a116ef"
+      "43379498a899178d"
     ]
   },
   "plans": [
@@ -15,19 +15,19 @@
       "name": "native",
       "dsl": false,
       "trace": true,
-      "alternative": [
-        "CXformPushGbDedupBelowJoin"
+      "contains": [
+        "Xform: CXformPushGbBelowJoin"
       ]
     },
     {
       "name": "shadow",
       "trace": true,
-      "policy": "isolate_push_gb_dedup_fk_residual.policy",
+      "policy": "isolate_push_gb_dedup_fk.policy",
       "contains": [
-        "\"status\":\"applied\",\"rule_hash\":\"dc768bb1f1a116ef\""
+        "\"status\":\"applied\",\"rule_hash\":\"43379498a899178d\""
       ],
       "alternative": [
-        "CXformPushGbDedupBelowJoin",
+        "CXformPushGbBelowJoin",
         "CXformDSLRule_Agg"
       ]
     },
@@ -36,21 +36,21 @@
       "dsl": false,
       "trace": true,
       "disable_xforms": [
-        "CXformPushGbDedupBelowJoin"
+        "CXformPushGbBelowJoin"
       ],
       "not_contains": [
-        "Xform: CXformPushGbDedupBelowJoin"
+        "Xform: CXformPushGbBelowJoin"
       ]
     },
     {
       "name": "replacement",
       "trace": true,
       "disable_xforms": [
-        "CXformPushGbDedupBelowJoin"
+        "CXformPushGbBelowJoin"
       ],
-      "policy": "isolate_push_gb_dedup_fk_residual.policy",
+      "policy": "isolate_push_gb_dedup_fk.policy",
       "contains": [
-        "\"status\":\"applied\",\"rule_hash\":\"dc768bb1f1a116ef\""
+        "\"status\":\"applied\",\"rule_hash\":\"43379498a899178d\""
       ],
       "alternative": [
         "CXformDSLRule_Agg"
@@ -59,7 +59,7 @@
   ],
   "rows": {
     "disable_xforms": [
-      "CXformPushGbDedupBelowJoin"
+      "CXformPushGbBelowJoin"
     ],
     "output": [
       "1,10"
