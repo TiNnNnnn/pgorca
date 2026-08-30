@@ -1,10 +1,10 @@
 {
-  "description": "A proved DSL rule pushes nullable foreign-key grouping attrs below an inner join with a residual predicate",
+  "description": "A proved DSL rule replaces composite foreign-key dedup pushdown as one vector rewrite",
   "replacement": {
     "xforms": [
       "CXformPushGbDedupBelowJoin"
     ],
-    "scope": "Outer grouping attrs contain a nullable FK and every outer residual dependency",
+    "scope": "Composite FK grouping attrs and every outer residual dependency",
     "status": "verified_full_replacement",
     "dsl_rule_hashes": [
       "dc768bb1f1a116ef"
@@ -15,8 +15,8 @@
       "name": "native",
       "dsl": false,
       "trace": true,
-      "alternative": [
-        "CXformPushGbDedupBelowJoin"
+      "contains": [
+        "Xform: CXformPushGbDedupBelowJoin"
       ]
     },
     {
@@ -62,10 +62,14 @@
       "CXformPushGbDedupBelowJoin"
     ],
     "output": [
-      "1,10"
+      "1,10,100",
+      "2,10,100",
+      "3,20,200"
     ],
     "postgres_output": [
-      "1,10"
+      "1,10,100",
+      "2,10,100",
+      "3,20,200"
     ]
   }
 }
