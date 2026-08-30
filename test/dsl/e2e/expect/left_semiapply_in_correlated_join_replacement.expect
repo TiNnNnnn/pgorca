@@ -1,13 +1,13 @@
 {
-  "description": "A proved aggregate/filter commute rule exposes a grouped correlated subquery to the SemiApply replacement",
+  "description": "Proved operator-local DSL rules decorrelate an IN subquery whose inner join predicate references the outer input",
   "replacement": {
     "xforms": [
       "CXformLeftSemiApplyIn2LeftSemiJoin"
     ],
-    "scope": "LeftSemiApply whose grouped inner input filters on an existing grouping key",
+    "scope": "LeftSemiApplyIn whose inner relation contains a correlated InnerJoin predicate",
     "status": "verified_partial_replacement",
     "dsl_rule_hashes": [
-      "d68592c2926cec06"
+      "977b505669323220"
     ]
   },
   "plans": [
@@ -21,7 +21,10 @@
     },
     {
       "name": "shadow",
-      "trace": true
+      "trace": true,
+      "contains": [
+        "\"status\":\"applied\",\"rule_hash\":\"977b505669323220\""
+      ]
     },
     {
       "name": "negative",
@@ -41,10 +44,10 @@
         "CXformLeftSemiApplyIn2LeftSemiJoin"
       ],
       "contains": [
-        "\"status\":\"applied\",\"rule_hash\":\"d68592c2926cec06\""
+        "\"status\":\"applied\",\"rule_hash\":\"977b505669323220\""
       ],
-      "not_contains": [
-        "Xform: CXformLeftSemiApplyIn2LeftSemiJoin"
+      "alternative": [
+        "CXformDSLRule_InSub"
       ]
     }
   ],
@@ -53,12 +56,14 @@
       "CXformLeftSemiApplyIn2LeftSemiJoin"
     ],
     "output": [
-      "2",
-      "3"
+      "1",
+      "1",
+      "2"
     ],
     "postgres_output": [
-      "2",
-      "3"
+      "1",
+      "1",
+      "2"
     ]
   }
 }
