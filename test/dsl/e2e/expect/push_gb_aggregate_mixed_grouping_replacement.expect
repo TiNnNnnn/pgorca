@@ -1,10 +1,10 @@
 {
-  "description": "The aggregate FK pushdown DSL rule preserves HAVING below the join",
+  "description": "One aggregate pushdown rule drops referred-side grouping columns and restores them through the unique join",
   "replacement": {
     "xforms": [
-      "CXformPushGbWithHavingBelowJoin"
+      "CXformPushGbBelowJoin"
     ],
-    "scope": "HAVING aggregate whose grouping contains the outer FK and whose aggregate inputs use only the outer child",
+    "scope": "Real aggregate with FK grouping on the outer child and additional grouping columns from the unique referred child",
     "status": "verified_partial_replacement",
     "dsl_rule_hashes": [
       "78c046d1ea440878"
@@ -16,7 +16,7 @@
       "dsl": false,
       "trace": true,
       "contains": [
-        "Xform: CXformPushGbWithHavingBelowJoin"
+        "Xform: CXformPushGbBelowJoin"
       ]
     },
     {
@@ -26,7 +26,7 @@
         "\"status\":\"applied\",\"rule_hash\":\"78c046d1ea440878\""
       ],
       "alternative": [
-        "CXformPushGbWithHavingBelowJoin",
+        "CXformPushGbBelowJoin",
         "CXformDSLRule_Agg"
       ]
     },
@@ -35,17 +35,17 @@
       "dsl": false,
       "trace": true,
       "disable_xforms": [
-        "CXformPushGbWithHavingBelowJoin"
+        "CXformPushGbBelowJoin"
       ],
       "not_contains": [
-        "Xform: CXformPushGbWithHavingBelowJoin"
+        "Xform: CXformPushGbBelowJoin"
       ]
     },
     {
       "name": "replacement",
       "trace": true,
       "disable_xforms": [
-        "CXformPushGbWithHavingBelowJoin"
+        "CXformPushGbBelowJoin"
       ],
       "contains": [
         "\"status\":\"applied\",\"rule_hash\":\"78c046d1ea440878\""
@@ -57,13 +57,15 @@
   ],
   "rows": {
     "disable_xforms": [
-      "CXformPushGbWithHavingBelowJoin"
+      "CXformPushGbBelowJoin"
     ],
     "output": [
-      "10,2"
+      "10,100,2",
+      "20,200,1"
     ],
     "postgres_output": [
-      "10,2"
+      "10,100,2",
+      "20,200,1"
     ]
   }
 }
