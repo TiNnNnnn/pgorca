@@ -1,13 +1,12 @@
 {
-  "description": "A proved expression-list rule lowers a scalar subquery inside a Window item",
+  "description": "One generic proved rule preserves GROUPS/RANGE frames and exclusion while lowering Window scalar subqueries",
   "replacement": {
     "xforms": [
       "CXformSequenceProject2Apply"
     ],
-    "scope": "One correlated scalar aggregate used with a full-partition Window frame",
+    "scope": "Correlated scalar aggregates in arbitrary preserved Window frames",
     "status": "verified_full_replacement",
     "dsl_rule_hashes": [
-      "f03b85207ada9a33",
       "f23d59b80126349c"
     ]
   },
@@ -24,7 +23,7 @@
     {
       "name": "shadow",
       "trace": true,
-      "policy": "isolate_sequence_project2apply_scalar.policy",
+      "policy": "isolate_sequence_project2apply_bounded.policy",
       "contains": [
         "Optimizer: pg_orca",
         "CXformDSLRule_Window",
@@ -50,7 +49,7 @@
       "disable_xforms": [
         "CXformSequenceProject2Apply"
       ],
-      "policy": "isolate_sequence_project2apply_scalar.policy",
+      "policy": "isolate_sequence_project2apply_bounded.policy",
       "contains": [
         "Optimizer: pg_orca",
         "CXformDSLRule_Window",
@@ -62,16 +61,16 @@
     "disable_xforms": [
       "CXformSequenceProject2Apply"
     ],
-    "policy": "isolate_sequence_project2apply_scalar.policy",
+    "policy": "isolate_sequence_project2apply_bounded.policy",
     "output": [
-      "1,40",
-      "2,40",
-      "3,40"
+      "1,30,40",
+      "2,10,40",
+      "3,30,30"
     ],
     "postgres_output": [
-      "1,40",
-      "2,40",
-      "3,40"
+      "1,30,40",
+      "2,10,40",
+      "3,30,30"
     ]
   }
 }
