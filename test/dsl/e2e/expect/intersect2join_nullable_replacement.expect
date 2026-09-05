@@ -1,5 +1,5 @@
 {
-  "description": "A proved DSL rule replaces Intersect with an equality join and full-row dedup for non-null inputs",
+  "description": "The Intersect DSL replacement uses positional null-safe equality for nullable composite rows",
   "replacement": {
     "xforms": [
       "CXformIntersect2Join"
@@ -72,12 +72,16 @@
     ],
     "policy": "isolate_intersect2join.policy",
     "output": [
-      "1",
-      "2"
+      "1,1",
+      "2,2",
+      "2,",
+      ",3"
     ],
     "postgres_output": [
-      "1",
-      "2"
+      "1,1",
+      "2,2",
+      "2,",
+      ",3"
     ]
   }
 }
