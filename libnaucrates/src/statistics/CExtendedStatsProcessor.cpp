@@ -248,6 +248,81 @@ find_strongest_dependency(CMDDependencyArray *dependencies, CBitSet *attnums)
 	return strongest;
 }
 
+/*
+ * Selectivity of the clauses on a dependency's implying attributes, P(a,b) for
+ * a dependency (a,b => c). Mirrors the attr_sel[] entries that
+ * clauselist_apply_dependencies() computes for the implying attributes: every
+ * compatible clause is estimated against its own attribute's histogram and the
+ * per-attribute selectivities are multiplied.
+ *
+ * The clauses are deliberately left unestimated and the histograms untouched.
+ * The implying attributes stay with the regular per-column path, which derives
+ * their filtered histograms and folds their selectivity into the damped scale
+ * factor; this value is only needed to decide how much of the implied clause's
+ * selectivity is already accounted for by them.
+ *
+ * An attribute that was implied by an earlier dependency has had its attnum
+ * bit cleared, and dependency_is_fully_matched() requires every attribute of a
+ * dependency to still be in the set, so an implying attribute here can never
+ * be one whose histogram this function's caller already replaced.
+ */
+static DOUBLE
+ImplyingAttributesSelectivity(CMDDependency *dependency,
+							  CStatsPredConj *conjunctive_pred_stats,
+							  UlongToIntMap *colid_to_attno_mapping,
+							  UlongToHistogramMap *result_histograms)
+{
+	DOUBLE selectivity = 1.0;
+
+	const ULONG num_implying = dependency->GetNAttributes() - 1;
+	const ULONG filters = conjunctive_pred_stats->GetNumPreds();
+
+	for (ULONG j = 0; j < num_implying; j++)
+	{
+		INT implying_attno = *(*dependency->GetFromAttno())[j];
+
+		for (ULONG ul = 0; ul < filters; ul++)
+		{
+			CStatsPred *child_pred = conjunctive_pred_stats->GetPredStats(ul);
+
+			if (child_pred->IsAlreadyUsedInScaleFactorEstimation() ||
+				!IsDependencyCapablePredicate(child_pred))
+			{
+				continue;
+			}
+
+			ULONG colid = child_pred->GetColId();
+			INT *attnum = colid_to_attno_mapping->Find(&colid);
+			if (nullptr == attnum || *attnum != implying_attno)
+			{
+				continue;
+			}
+
+			const CHistogram *histogram = result_histograms->Find(&colid);
+			if (nullptr == histogram || histogram->IsEmpty() ||
+				histogram->GetFrequency() < CStatistics::Epsilon)
+			{
+				/* no usable statistics; same fallback as the implied side */
+				selectivity *= CHistogram::DefaultSelectivity.Get();
+				continue;
+			}
+
+			CStatsPredPoint *point_pred =
+				CStatsPredPoint::ConvertPredStats(child_pred);
+			CDouble clause_scale_factor(1.0);
+			CHistogram *filtered_histogram =
+				histogram->MakeHistogramFilterNormalize(
+					point_pred->GetCmpType(), point_pred->GetPredPoint(),
+					&clause_scale_factor);
+			GPOS_DELETE(filtered_histogram);
+
+			selectivity *= 1.0 / clause_scale_factor.Get();
+		}
+	}
+
+	return selectivity;
+}
+
 //---------------------------------------------------------------------------
 //	@function:
 //		CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation
@@ -374,6 +449,7 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation(
 	{
 		/* selectivity of the conjunct on the implied column, P(c) above */
 		DOUBLE implied_sel = 1.0;
+		BOOL implied_estimated = false;
 		CMDDependency *dependency;
 
 		/* the widest/strongest dependency, fully matched by clauses */
@@ -500,6 +576,7 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation(
 			/* mark this one as done, so we don't touch it again. */
 			child_pred->SetEstimated();
 			estimated_attnums->ExchangeSet(*attnum);
+			implied_estimated = true;
 
 			/*
 			 * Mark that we've got and used the dependency on this clause.
@@ -510,20 +587,55 @@ CExtendedStatsProcessor::ApplyCorrelatedStatsToScaleFactorFilterCalculation(
 		}
 
 		/*
-		 * Fold the implied clause into the estimate:
+		 * Fold the implied clause into the estimate. The combined selectivity
+		 * of a dependency (a => b) with degree of validity 'f' is
 		 *
-		 * P(a,b) = P(a) * (f + (1-f) * P(b))
+		 *     P(a,b) = f * Min(P(a), P(b)) + (1-f) * P(a) * P(b)
 		 *
-		 * where 'f' is the degree of validity of the dependency. In
-		 * scale-factor space that is a division by the bracket: with f = 1 the
-		 * implied clause is fully redundant and the factor is 1, with f = 0 it
-		 * degenerates to the independence assumption. The bracket is a
-		 * probability; clamp it so that rounding in f + (1-f) cannot push it
-		 * past 1 and yield a scale factor below 1.
+		 * i.e. in the fraction f of the rows where the dependency holds one
+		 * clause implies the other and only the more selective of the two
+		 * filters, while in the remaining rows the two are independent. The
+		 * Min() keeps the result from exceeding either individual selectivity,
+		 * which the plain P(a) * (f + (1-f) * P(b)) form does not.
+		 *
+		 * The clauses on the implying attributes stay with the per-column
+		 * path, so what has to be returned from here is the implied clause's
+		 * contribution alone, P(b|a) = P(a,b) / P(a):
+		 *
+		 *     P(b|a) = f * Min(P(a), P(b)) / P(a) + (1-f) * P(b)
+		 *
+		 * which is what clauselist_apply_dependencies() substitutes for the
+		 * implied attribute's selectivity. In scale-factor space that is a
+		 * division by it: with f = 1 and P(a) <= P(b) the implied clause is
+		 * fully redundant and the factor is 1, with f = 0 it degenerates to
+		 * the independence assumption. The result is a probability; clamp it
+		 * so that rounding cannot push it past 1 and yield a scale factor
+		 * below 1, and keep it off zero so the division stays finite.
 		 */
-		DOUBLE degree = dependency->GetDegree().Get();
-		DOUBLE implied_factor =
-			std::min(1.0, degree + (1.0 - degree) * implied_sel);
+		DOUBLE implied_factor = 1.0;
+
+		if (implied_estimated)
+		{
+			DOUBLE degree = dependency->GetDegree().Get();
+			DOUBLE implying_sel = ImplyingAttributesSelectivity(
+				dependency, conjunctive_pred_stats, colid_to_attno_mapping,
+				result_histograms);
+
+			if (implying_sel <= implied_sel)
+			{
+				implied_factor = degree + (1.0 - degree) * implied_sel;
+			}
+			else
+			{
+				/* implying_sel > implied_sel >= 0, so the division is safe */
+				implied_factor = degree * implied_sel / implying_sel +
+								 (1.0 - degree) * implied_sel;
+			}
+
+			implied_factor = std::max(CStatistics::Epsilon.Get(),
+									  std::min(1.0, implied_factor));
+		}
+
 		dependency_scale_factor *= 1.0 / implied_factor;
 	}
 	GPOS_ASSERT(1.0 <= dependency_scale_factor);
