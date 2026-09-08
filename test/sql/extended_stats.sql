@@ -72,9 +72,18 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- degree of validity of the dependency actually used below
-SELECT dependencies::text FROM pg_stats_ext
-WHERE statistics_name = 'extstats_fd_dep';
+-- Degree of validity of the dependency the estimates below depend on. Read it
+-- out of the JSON rather than printing pg_dependencies' text: the format is
+-- version-dependent (an object keyed "2 => 1" through PG 18, an array of
+-- {attributes, dependency, degree} objects from PG 19 on).
+SELECT CASE jsonb_typeof(j)
+         WHEN 'object'
+           THEN (SELECT max(e.v::numeric) FROM jsonb_each_text(j) AS e(k, v))
+         ELSE (SELECT max((e->>'degree')::numeric)
+               FROM jsonb_array_elements(j) AS e)
+       END AS degree
+FROM (SELECT dependencies::text::jsonb FROM pg_stats_ext
+      WHERE statistics_name = 'extstats_fd_dep') s(j);
 
 -- P(implying) = P(fd_b = 1) = 0.005 <= P(implied) = P(fd_a = 1) = 0.01, so
 -- P(fd_a|fd_b) = 0.5 + 0.5 * 0.01 = 0.505 and the estimate is
