@@ -10,6 +10,8 @@
 //---------------------------------------------------------------------------
 #include "gpopt/engine/CEngine.h"
 
+#include <string>
+
 #include "gpos/base.h"
 #include "gpos/common/CAutoTimer.h"
 #include "gpos/common/CHashMapIter.h"
@@ -435,7 +437,9 @@ void
 CEngine::InsertExpressionChildren(CExpression *pexpr,
 								  CGroupArray *pdrgpgroupChildren,
 								  CXform::EXformId exfidOrigin,
-								  CGroupExpression *pgexprOrigin)
+								  CGroupExpression *pgexprOrigin,
+								  const CDSLRule *pruleOrigin,
+								  const CHAR *szTargetPath)
 {
 	GPOS_ASSERT(nullptr != pexpr);
 	GPOS_ASSERT(nullptr != pdrgpgroupChildren);
@@ -456,9 +460,21 @@ CEngine::InsertExpressionChildren(CExpression *pexpr,
 		else
 		{
 			// insert child expression recursively
-			pgroupChild =
-				PgroupInsert(nullptr /*pgroupTarget*/, (*pexpr)[i], exfidOrigin,
-							 pgexprOrigin, true /*fIntermediate*/);
+			if (nullptr == pruleOrigin)
+			{
+				pgroupChild = PgroupInsert(
+					nullptr /*pgroupTarget*/, (*pexpr)[i], exfidOrigin,
+					pgexprOrigin, true /*fIntermediate*/);
+			}
+			else
+			{
+				std::string childPath(szTargetPath);
+				childPath.append("/").append(std::to_string(i));
+				pgroupChild = PgroupInsert(
+					nullptr /*pgroupTarget*/, (*pexpr)[i], exfidOrigin,
+					pgexprOrigin, true /*fIntermediate*/, pruleOrigin,
+					childPath.c_str());
+			}
 		}
 		pdrgpgroupChildren->Append(pgroupChild);
 	}
@@ -478,7 +494,8 @@ CEngine::InsertExpressionChildren(CExpression *pexpr,
 CGroup *
 CEngine::PgroupInsert(CGroup *pgroupTarget, CExpression *pexpr,
 					  CXform::EXformId exfidOrigin,
-					  CGroupExpression *pgexprOrigin, BOOL fIntermediate)
+					  CGroupExpression *pgexprOrigin, BOOL fIntermediate,
+					  const CDSLRule *pruleOrigin, const CHAR *szTargetPath)
 {
 	// recursive function - check stack
 	GPOS_CHECK_STACK_SIZE;
@@ -507,7 +524,7 @@ CEngine::PgroupInsert(CGroup *pgroupTarget, CExpression *pexpr,
 	CGroupArray *pdrgpgroupChildren =
 		GPOS_NEW(m_mp) CGroupArray(m_mp, pexpr->Arity());
 	InsertExpressionChildren(pexpr, pdrgpgroupChildren, exfidOrigin,
-							 pgexprOrigin);
+							 pgexprOrigin, pruleOrigin, szTargetPath);
 
 	// A DSL target may contain fresh intermediate nodes which resolve to an
 	// existing Memo group only during recursive insertion. If such a resolved
@@ -552,6 +569,11 @@ CEngine::PgroupInsert(CGroup *pgroupTarget, CExpression *pexpr,
 		m_pmemo->PgroupInsert(pgroupTarget, pexpr, pgexpr);
 	COptCtxt::PoctxtFromTLS()->RegisterDSLStatsExperimentGroup(
 		pop, pgroupContainer);
+	if (nullptr != pruleOrigin && nullptr != pgexpr->Pgroup())
+	{
+		COptCtxt::PoctxtFromTLS()->RegisterDSLGroupExpressionOrigin(
+			pgexpr, pruleOrigin, szTargetPath);
+	}
 
 	if (nullptr == pgexpr->Pgroup())
 	{
@@ -598,6 +620,10 @@ CEngine::InsertXformResult(
 	CExpression *pexpr = pxfres->PexprNext();
 	while (nullptr != pexpr)
 	{
+		const CDSLRule *pruleOrigin =
+			CGroupExpression::FDSLRuleXform(exfidOrigin)
+				? COptCtxt::PoctxtFromTLS()->PdslruleTakePendingAlternative(pexpr)
+				: nullptr;
 		CExpression *pexprInsert = pexpr;
 		const BOOL join_region_ingress =
 			nullptr != dynamic_cast<CLogicalApply *>(pgexprOrigin->Pop()) &&
@@ -615,7 +641,7 @@ CEngine::InsertXformResult(
 		}
 		CGroup *pgroupContainer =
 			PgroupInsert(pgroupOrigin, pexprInsert, exfidOrigin, pgexprOrigin,
-						 false /*fIntermediate*/);
+						 false /*fIntermediate*/, pruleOrigin);
 		if (pexprInsert != pexpr)
 		{
 			pexprInsert->Release();
