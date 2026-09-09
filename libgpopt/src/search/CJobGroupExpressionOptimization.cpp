@@ -562,6 +562,13 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 
 	COptimizationContext *resolved = CJobGroupOptimization::ScheduleJob(
 		psc, pgroupChild, m_pgexpr, pocChild, this);
+	if (resolved == nullptr)
+	{
+		// A completed result proves this request cannot meet its ceiling.
+		m_fChildOptimizationFailed = true;
+		pocChild->Release();
+		return;
+	}
 	if (budget_search)
 	{
 		m_child_requests[m_ulChildIndex] = resolved;

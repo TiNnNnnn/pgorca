@@ -544,7 +544,10 @@ public:
 
 	// Reuse completed optima or proven failure ceilings across budgets.
 	// Returned contexts remain owned by the existing context table.
-	COptimizationContext *PocReuseCompleted(COptimizationContext *request);
+	// If requested, also return an optimum above the ceiling as a lower-bound
+	// certificate; the caller must reject, not install, that plan.
+	COptimizationContext *PocReuseCompleted(COptimizationContext *request,
+		BOOL *budget_rejected = nullptr);
 	void RecordBudgetCompletion(COptimizationContext *context);
 
 	// update the best group cost under the given optimization context

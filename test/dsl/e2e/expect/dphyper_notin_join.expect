@@ -18,11 +18,30 @@
         "Xform: CXformAntiSemiJoinNotInInnerJoinSwap"
       ],
       "joins": 1
+    },
+    {
+      "name": "bounded-top-down",
+      "dsl": true,
+      "dphyper": true,
+      "dphyper_shadow": false,
+      "dphyper_top_down": true,
+      "dphyper_verify": true,
+      "enable_cost_budget": true,
+      "contains": [
+        "Optimizer: pg_orca",
+        "DPHyperVerify: status=equal"
+      ],
+      "not_contains": [
+        "DPHyperVerify: status=mismatch",
+        "Failed assertion"
+      ]
     }
   ],
   "rows": {
     "dphyper": true,
     "dphyper_shadow": false,
+    "dphyper_top_down": true,
+    "enable_cost_budget": true,
     "output": [
       "2,2"
     ],

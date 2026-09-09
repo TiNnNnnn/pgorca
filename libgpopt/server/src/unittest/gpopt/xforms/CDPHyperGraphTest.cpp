@@ -600,6 +600,9 @@ CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
 		GPOS_NEW(mp) CPhysicalSort(mp, GPOS_NEW(mp) COrderSpec(mp)),
 		GPOS_NEW(mp) CGroupArray(mp),
 		CXform::ExfInvalid, nullptr, false));
+	// No group/stats are attached: a cache-only miss must not try costing.
+	GPOS_UNITTEST_ASSERT(expr->CostLowerBound(mp, wide->Prpp(), nullptr,
+		gpos::ulong_max, true /*cached_only*/).Get() == GPOPT_INVALID_COST);
 	wide->AddRef();
 	expr->AddRef();
 	CAutoRef<CCostContext> cost(GPOS_NEW(mp) CCostContext(mp, wide.Value(), 0, expr.Value()));
@@ -616,6 +619,18 @@ CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
 	CAutoRef<COptimizationContext> under(request(std::nextafter(3.0, 0.0)));
 	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(tie.Value()) == wide.Value());
 	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value()) == nullptr);
+	BOOL rejected = true;
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(tie.Value(), &rejected) == wide.Value());
+	GPOS_UNITTEST_ASSERT(!rejected);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value(), &rejected) == wide.Value());
+	GPOS_UNITTEST_ASSERT(rejected);
+	// Reject the new request, never erase the feasible optimum or mark its
+	// context failed. A subsequent wider/unbounded request must still succeed.
+	GPOS_UNITTEST_ASSERT(wide->PccBest() == cost.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value(), &rejected) == wide.Value());
+	GPOS_UNITTEST_ASSERT(!rejected);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_stats.Value(), &rejected) == nullptr);
+	GPOS_UNITTEST_ASSERT(!rejected);
 	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(zero.Value()) == small.Value());
 	CAutoRef<COptimizationContext> failure(request(2.0));
 	failure->SetState(COptimizationContext::estOptimizing);

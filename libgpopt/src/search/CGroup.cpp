@@ -505,10 +505,14 @@ CGroup::PocInsert(COptimizationContext *poc)
 }
 
 COptimizationContext *
-CGroup::PocReuseCompleted(COptimizationContext *request)
+CGroup::PocReuseCompleted(COptimizationContext *request, BOOL *budget_rejected)
 {
 	// Appendix A: success is optimal; failure proves only an insufficient
 	// ceiling. Never answer a wider request using a narrower failed search.
+	if (budget_rejected != nullptr)
+	{
+		*budget_rejected = false;
+	}
 	if (m_budget_completions == nullptr)
 	{
 		return nullptr;
@@ -528,6 +532,15 @@ CGroup::PocReuseCompleted(COptimizationContext *request)
 		 request->CostLimit() <= entry->failure->CostLimit()))
 	{
 		return entry->failure;
+	}
+	if (budget_rejected != nullptr && entry->best != nullptr)
+	{
+		// The completed optimum is also an exact lower bound. A smaller
+		// ceiling cannot succeed, so there is no reason to descend again.
+		GPOS_ASSERT(request->FBounded());
+		GPOS_ASSERT(entry->best->PccBest()->Cost().Get() > request->CostLimit());
+		*budget_rejected = true;
+		return entry->best;
 	}
 	return nullptr;
 }

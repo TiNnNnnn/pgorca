@@ -950,7 +950,7 @@ CEngine::FSafeToPrune(
 	CGroupExpression *pgexpr, CReqdPropPlan *prpp, CCostContext *pccChild,
 	ULONG child_index,
 	CCost *pcostLowerBound,	// output: a lower bound on plan's cost
-	COptimizationContext *request
+	COptimizationContext *request, BOOL cached_only
 )
 {
 	GPOS_ASSERT(nullptr != pcostLowerBound);
@@ -985,7 +985,7 @@ CEngine::FSafeToPrune(
 	{
 		// compute a cost lower bound for the equivalent plan rooted by given group expression
 		CCost costLowerBound =
-			pgexpr->CostLowerBound(m_mp, prpp, pccChild, child_index);
+			pgexpr->CostLowerBound(m_mp, prpp, pccChild, child_index, cached_only);
 		*pcostLowerBound = costLowerBound;
 		if (costLowerBound.Get() > limit)
 		{
@@ -1017,11 +1017,17 @@ CEngine::FCostBudgetSearchEnabled() const
 }
 
 void
-CEngine::RecordCostBudget(COptimizationContext *request, BOOL pruned, BOOL reused)
+CEngine::RecordCostBudgetReuse(COptimizationContext *request,
+	COptimizationContext *completed, BOOL rejected)
 {
-	if (reused)
+	++m_cost_budget_skipped_jobs;
+	if (rejected)
 	{
-		if (request->PccBest() != nullptr)
+		++m_cost_budget_reused_lower_bound;
+	}
+	else if (request->CostLimit() != completed->CostLimit())
+	{
+		if (completed->PccBest() != nullptr)
 		{
 			++m_cost_budget_reused_feasible;
 		}
@@ -1029,8 +1035,12 @@ CEngine::RecordCostBudget(COptimizationContext *request, BOOL pruned, BOOL reuse
 		{
 			++m_cost_budget_reused_failure;
 		}
-		return;
 	}
+}
+
+void
+CEngine::RecordCostBudget(COptimizationContext *request, BOOL pruned)
+{
 	if (request != nullptr && request->FBounded())
 	{
 		if (pruned)
@@ -2171,7 +2181,10 @@ CEngine::Optimize()
 					<< " bounded_failure=" << m_cost_budget_failed
 					<< " pruned=" << m_cost_budget_pruned
 					<< " reused_feasible=" << m_cost_budget_reused_feasible
-					<< " reused_failure=" << m_cost_budget_reused_failure;
+					<< " reused_failure=" << m_cost_budget_reused_failure
+					<< " reused_lower_bound=" << m_cost_budget_reused_lower_bound
+					<< " skipped_jobs=" << m_cost_budget_skipped_jobs
+					<< " precheck_skipped_jobs=" << m_cost_budget_precheck_jobs;
 			}
 		}
 

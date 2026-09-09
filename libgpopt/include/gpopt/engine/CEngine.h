@@ -70,6 +70,9 @@ private:
 	ULONG m_cost_budget_pruned{0};
 	ULONG m_cost_budget_reused_feasible{0};
 	ULONG m_cost_budget_reused_failure{0};
+	ULONG m_cost_budget_reused_lower_bound{0};
+	ULONG m_cost_budget_skipped_jobs{0};
+	ULONG m_cost_budget_precheck_jobs{0};
 
 	// memo table
 	CMemo *m_pmemo;
@@ -235,8 +238,10 @@ private:
 
 public:
 	BOOL FCostBudgetSearchEnabled() const;
-	void RecordCostBudget(COptimizationContext *request, BOOL pruned,
-						  BOOL reused = false);
+	void RecordCostBudget(COptimizationContext *request, BOOL pruned);
+	void RecordCostBudgetReuse(COptimizationContext *request,
+		COptimizationContext *completed, BOOL rejected);
+	void RecordCostBudgetPrecheck(ULONG jobs) { m_cost_budget_precheck_jobs += jobs; }
 	CEngine(const CEngine &) = delete;
 
 	// ctor
@@ -424,7 +429,8 @@ public:
 	BOOL FSafeToPrune(CGroupExpression *pgexpr, CReqdPropPlan *prpp,
 					  CCostContext *pccChild, ULONG child_index,
 					  CCost *pcostLowerBound,
-					  COptimizationContext *request = nullptr);
+					  COptimizationContext *request = nullptr,
+					  BOOL cached_only = false);
 
 	// print
 	IOstream &OsPrint(IOstream &) const;

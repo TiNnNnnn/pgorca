@@ -555,7 +555,8 @@ CGroupExpression::PccComputeCost(
 //---------------------------------------------------------------------------
 CCost
 CGroupExpression::CostLowerBound(CMemoryPool *mp, CReqdPropPlan *prppInput,
-								 CCostContext *pccChild, ULONG child_index)
+								 CCostContext *pccChild, ULONG child_index,
+								 BOOL cached_only)
 {
 	GPOS_ASSERT(nullptr != prppInput);
 	GPOS_ASSERT(Pop()->FPhysical());
@@ -572,6 +573,11 @@ CGroupExpression::CostLowerBound(CMemoryPool *mp, CReqdPropPlan *prppInput,
 	{
 		ppp->Release();
 		return *pcostLowerBound;
+	}
+	if (cached_only)
+	{
+		ppp->Release();
+		return CCost(GPOPT_INVALID_COST);
 	}
 
 	// compute partial plan cost

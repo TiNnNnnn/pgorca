@@ -83,6 +83,8 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
         budget_summary = re.search(
             r"CostBudgetSummary: feasible=(\d+) bounded_failure=(\d+) pruned=(\d+)", stderr)
         budget_reuse = re.search(r"reused_feasible=(\d+) reused_failure=(\d+)", stderr)
+        budget_early = re.search(r"reused_lower_bound=(\d+) skipped_jobs=(\d+)", stderr)
+        budget_precheck = re.search(r"precheck_skipped_jobs=(\d+)", stderr)
         audits[mode] = {
             "rc": rc, "optimizer": optimizer_name(stdout),
             "optimizer_cost": float(cost[1]) if cost else None,
@@ -95,6 +97,9 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
                 map(int, budget_summary.groups()))) if budget_summary else {},
             "cost_budget_reuse": dict(zip(("feasible", "failure"),
                 map(int, budget_reuse.groups()))) if budget_reuse else {},
+            "cost_budget_early": dict(zip(("lower_bound", "skipped_jobs"),
+                map(int, budget_early.groups()))) if budget_early else {},
+            "cost_budget_precheck_jobs": int(budget_precheck[1]) if budget_precheck else 0,
         }
         if rc or plans[mode] is None or optimizer_name(stdout) == "postgres":
             failures.append(f"{mode}: audit failed or PostgreSQL fallback")
