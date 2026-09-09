@@ -526,6 +526,12 @@ CGroupExpression::PccComputeCost(
 	}
 
 	pcc->SetState(CCostContext::estCosted);
+	if (!fPruned && fValid && poc->FBounded() &&
+		pcc->Cost().Get() > poc->CostLimit())
+	{
+		pcc->Release();
+		return nullptr;
+	}
 	if (fValid)
 	{
 		return PccInsertBest(pcc);

@@ -140,6 +140,7 @@ public:
 
 	CCost Cost(CExpressionHandle &exprhdl,
 			   const SCostingInfo *pci) const override;
+	BOOL FChildrenCostFloor(CExpressionHandle &exprhdl) const override;
 
 	ECostModelType
 	Ecmt() const override

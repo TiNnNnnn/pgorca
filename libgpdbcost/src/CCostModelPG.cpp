@@ -3376,7 +3376,17 @@ CCostModelPG::Cost(CExpressionHandle &exprhdl, const SCostingInfo *pci) const
 			__builtin_unreachable();
 	}
 
+	GPOS_ASSERT_IMP(FChildrenCostFloor(exprhdl), local.Get() >= 0.0);
 	return CCost(children.Get() + local.Get());
+}
+
+BOOL
+CCostModelPG::FChildrenCostFloor(CExpressionHandle &exprhdl) const
+{
+	// All PG hash-join variants add both complete child costs and nonnegative
+	// local build/probe/qual/spill work. Other operators need separate audits:
+	// in particular CostLimit deliberately returns a negative local adjustment.
+	return CUtils::FHashJoin(exprhdl.Pop());
 }
 
 // EOF

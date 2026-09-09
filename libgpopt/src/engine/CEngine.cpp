@@ -10,6 +10,7 @@
 //---------------------------------------------------------------------------
 #include "gpopt/engine/CEngine.h"
 
+#include <algorithm>
 #include <string>
 
 #include "gpos/base.h"
@@ -948,7 +949,8 @@ BOOL
 CEngine::FSafeToPrune(
 	CGroupExpression *pgexpr, CReqdPropPlan *prpp, CCostContext *pccChild,
 	ULONG child_index,
-	CCost *pcostLowerBound	// output: a lower bound on plan's cost
+	CCost *pcostLowerBound,	// output: a lower bound on plan's cost
+	COptimizationContext *request
 )
 {
 	GPOS_ASSERT(nullptr != pcostLowerBound);
@@ -971,15 +973,23 @@ CEngine::FSafeToPrune(
 	// check if container group has a plan for given properties
 	CGroup *pgroup = pgexpr->Pgroup();
 	COptimizationContext *pocGroup =
+		request != nullptr && request->FBounded() ? request :
 		pgroup->PocLookupBest(m_mp, UlSearchStages(), prpp);
+	DOUBLE limit = request != nullptr ? request->CostLimit() : -1.0;
 	if (nullptr != pocGroup && nullptr != pocGroup->PccBest())
+	{
+		const DOUBLE incumbent = pocGroup->PccBest()->Cost().Get();
+		limit = limit < 0.0 ? incumbent : std::min(limit, incumbent);
+	}
+	if (limit >= 0.0)
 	{
 		// compute a cost lower bound for the equivalent plan rooted by given group expression
 		CCost costLowerBound =
 			pgexpr->CostLowerBound(m_mp, prpp, pccChild, child_index);
 		*pcostLowerBound = costLowerBound;
-		if (costLowerBound > pocGroup->PccBest()->Cost())
+		if (costLowerBound.Get() > limit)
 		{
+			RecordCostBudget(request, true);
 			// group expression cannot deliver a better plan for given properties and can be safely pruned
 			return true;
 		}
@@ -991,12 +1001,33 @@ CEngine::FSafeToPrune(
 
 //---------------------------------------------------------------------------
 //	@function:
-//		CEngine::Pmemotmap
+//		CEngine::RecordCostBudget
 //
 //	@doc:
-//		Build tree map on memo
+//		Collect bounded-search counters without per-event logging
 //
 //---------------------------------------------------------------------------
+void
+CEngine::RecordCostBudget(COptimizationContext *request, BOOL pruned)
+{
+	if (request != nullptr && request->FBounded())
+	{
+		if (pruned)
+		{
+			++m_cost_budget_pruned;
+		}
+		else if (request->PccBest() != nullptr)
+		{
+			++m_cost_budget_feasible;
+		}
+		else
+		{
+			++m_cost_budget_failed;
+		}
+	}
+}
+
+// Build tree map on memo.
 MemoTreeMap *
 CEngine::Pmemotmap()
 {
@@ -2110,6 +2141,15 @@ CEngine::Optimize()
 		if (GPOS_FTRACE(EopttracePrintOptimizationStatistics))
 		{
 			sched.PrintStats();
+			if (GPOS_FTRACE(EopttraceEnableCostBudget))
+			{
+				// Per-event trace appends repeatedly validate the growing debug
+				// string. Aggregate here so observation does not dominate search.
+				CAutoTrace trace(m_mp);
+				trace.Os() << "CostBudgetSummary: feasible=" << m_cost_budget_feasible
+					<< " bounded_failure=" << m_cost_budget_failed
+					<< " pruned=" << m_cost_budget_pruned;
+			}
 		}
 
 		poc->Release();

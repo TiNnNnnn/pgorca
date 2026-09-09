@@ -11,6 +11,8 @@
 
 #include "gpopt/search/CJobGroupOptimization.h"
 
+#include "gpopt/base/CCostContext.h"
+#include "gpopt/base/COptCtxt.h"
 #include "gpopt/engine/CEngine.h"
 #include "gpopt/search/CGroup.h"
 #include "gpopt/search/CGroupExpression.h"
@@ -159,7 +161,28 @@ CJobGroupOptimization::Init(
 	m_jsm.SetAction(estDampingOptimizationLevel, EevtCompleteOptimization);
 
 	m_pgexprOrigin = pgexprOrigin;
-	m_poc = m_pgroup->PocInsert(poc);
+	m_poc = nullptr;
+	// ponytail: exact budgets repeat work; cross-budget completion reuse
+	// must preserve both required-property and statistics identity.
+	if (poc->FBounded())
+	{
+		// A completed unbounded optimum below the ceiling already answers
+		// this request. Never reuse a different statistics context or an
+		// unfinished incumbent as a completed optimum.
+		auto *cached = m_pgroup->PocLookup(COptCtxt::PoctxtFromTLS()->Pmp(), poc->Prpp(),
+			poc->UlSearchStageIndex());
+		if (cached != nullptr && cached->Est() == COptimizationContext::estOptimized &&
+			cached->PccBest() != nullptr &&
+			cached->PccBest()->Cost().Get() <= poc->CostLimit() &&
+			COptimizationContext::FEqualForStats(cached, poc))
+		{
+			m_poc = cached;
+		}
+	}
+	if (m_poc == nullptr)
+	{
+		m_poc = m_pgroup->PocInsert(poc);
+	}
 	if (poc == m_poc)
 	{
 		// pin down context in hash table
@@ -304,7 +327,7 @@ CJobGroupOptimization::EevtOptimizeChildren(CSchedulerContext *psc,
 //
 //---------------------------------------------------------------------------
 CJobGroupOptimization::EEvent
-CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *,  // psc
+CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *psc,
 												CJob *pjOwner)
 {
 	// get a job pointer
@@ -322,6 +345,7 @@ CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *,  // psc
 
 	// move optimization context to optimized state
 	pjgo->m_poc->SetState(COptimizationContext::estOptimized);
+	psc->Peng()->RecordCostBudget(pjgo->m_poc, false);
 
 	return eevOptimized;
 }
@@ -352,7 +376,7 @@ CJobGroupOptimization::FExecute(CSchedulerContext *psc)
 //		Schedule a new group optimization job
 //
 //---------------------------------------------------------------------------
-void
+COptimizationContext *
 CJobGroupOptimization::ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
 								   CGroupExpression *pgexprOrigin,
 								   COptimizationContext *poc, CJob *pjParent)
@@ -363,6 +387,7 @@ CJobGroupOptimization::ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
 	CJobGroupOptimization *pjgo = PjConvert(pj);
 	pjgo->Init(pgroup, pgexprOrigin, poc);
 	psc->Psched()->Add(pjgo, pjParent);
+	return pjgo->m_poc;
 }
 
 #ifdef GPOS_DEBUG

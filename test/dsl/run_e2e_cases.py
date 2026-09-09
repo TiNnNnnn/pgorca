@@ -233,7 +233,7 @@ def experiment_setting(args: argparse.Namespace, expected: dict[str, object]) ->
 def dphyper_experiment_settings(expected: dict[str, object]) -> str:
     return "\n".join(
         bool_guc_setting(f"pg_orca.{name}", expected[name], False)
-        for name in ("dphyper_top_down", "dphyper_verify")
+        for name in ("dphyper_top_down", "dphyper_verify", "enable_cost_budget")
         if name in expected
     )
 
@@ -305,7 +305,7 @@ def actual_plan(expected: dict[str, object], output: str) -> dict[str, object]:
             "name", "dsl", "xform_trace", "dphyper", "dphyper_edge_budget",
             "dphyper_pair_budget", "dphyper_shadow", "native", "trace",
             "disable_xforms", "policy", "stats_experiment", "assert_maxonerow",
-            "dphyper_top_down", "dphyper_verify"
+            "dphyper_top_down", "dphyper_verify", "enable_cost_budget"
         )
         if key in expected
     }
@@ -387,7 +387,7 @@ COPY ({query}) TO STDOUT WITH (FORMAT csv);
         for key in (
             "dphyper", "dphyper_shadow", "dphyper_edge_budget",
             "dphyper_pair_budget", "native", "disable_xforms", "policy",
-            "assert_maxonerow", "dphyper_top_down", "dphyper_verify"
+            "assert_maxonerow", "dphyper_top_down", "dphyper_verify", "enable_cost_budget"
         )
         if key in expected
     }

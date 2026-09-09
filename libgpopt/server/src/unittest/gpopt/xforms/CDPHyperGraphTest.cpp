@@ -18,6 +18,15 @@
 #include "gpos/test/CUnittest.h"
 
 #include "gpopt/base/CUtils.h"
+#include "gpopt/base/CCTEReq.h"
+#include "gpopt/base/CDistributionSpecSingleton.h"
+#include "gpopt/base/CEnfdDistribution.h"
+#include "gpopt/base/CEnfdOrder.h"
+#include "gpopt/base/CEnfdPartitionPropagation.h"
+#include "gpopt/base/CEnfdRewindability.h"
+#include "gpopt/base/COptimizationContext.h"
+#include "gpopt/base/CReqdPropPlan.h"
+#include "gpopt/base/CReqdPropRelational.h"
 #include "gpopt/operators/CLogicalLeftAntiSemiJoin.h"
 #include "gpopt/operators/CLogicalLeftAntiSemiJoinNotIn.h"
 #include "gpopt/operators/CLogicalLeftSemiJoin.h"
@@ -488,6 +497,7 @@ CDPHyperGraphTest::EresUnittest()
 			CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_AtomicBudget),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_TopDown),
+		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_CostBudgetContexts),
 		GPOS_UNITTEST_FUNC(
 			CDPHyperGraphTest::EresUnittest_GraphSimplifierInfrastructure),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_GraphSimplifier),
@@ -506,6 +516,62 @@ CDPHyperGraphTest::EresUnittest()
 			CDPHyperGraphTest::EresUnittest_CartesianDifferential),
 	};
 	return CUnittest::EresExecute(rgut, GPOS_ARRAY_SIZE(rgut));
+}
+
+GPOS_RESULT
+CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
+{
+	CAutoMemoryPool amp;
+	CMemoryPool *mp = amp.Pmp();
+	CDSLTestFixture fixture(mp);
+	CAutoRef<CGroup> group(GPOS_NEW(mp) CGroup(mp, false));
+	CAutoRef<CReqdPropPlan> props(GPOS_NEW(mp) CReqdPropPlan(
+		GPOS_NEW(mp) CColRefSet(mp),
+		GPOS_NEW(mp) CEnfdOrder(GPOS_NEW(mp) COrderSpec(mp), CEnfdOrder::EomSatisfy),
+		GPOS_NEW(mp) CEnfdDistribution(GPOS_NEW(mp) CDistributionSpecSingleton(),
+			CEnfdDistribution::EdmSatisfy),
+		GPOS_NEW(mp) CEnfdRewindability(GPOS_NEW(mp) CRewindabilitySpec(
+			CRewindabilitySpec::ErtNone, CRewindabilitySpec::EmhtNoMotion),
+			CEnfdRewindability::ErmSatisfy),
+		GPOS_NEW(mp) CEnfdPartitionPropagation(GPOS_NEW(mp) CPartitionPropagationSpec(mp),
+			CEnfdPartitionPropagation::EppmSatisfy), GPOS_NEW(mp) CCTEReq(mp)));
+	const auto request = [&](DOUBLE limit, BOOL different_stats = false) {
+		props->AddRef();
+		auto *columns = GPOS_NEW(mp) CColRefSet(mp);
+		if (different_stats)
+		{
+			columns->Include(fixture.PcrCreateInt4("stats_column"));
+		}
+		return GPOS_NEW(mp) COptimizationContext(mp, group.Value(), props.Value(),
+			GPOS_NEW(mp) CReqdPropRelational(columns),
+			GPOS_NEW(mp) IStatisticsArray(mp), 0, limit);
+	};
+	CAutoRef<COptimizationContext> small(request(1.0));
+	CAutoRef<COptimizationContext> repeated(request(1.0));
+	CAutoRef<COptimizationContext> wide(request(10.0));
+	CAutoRef<COptimizationContext> unlimited(request(-1.0));
+	CAutoRef<COptimizationContext> other_stats(request(1.0, true));
+	CAutoRef<COptimizationContext> zero(request(0.0));
+	CAutoRef<COptimizationContext> negative_zero(request(-0.0));
+	GPOS_UNITTEST_ASSERT(zero->Matches(negative_zero.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::HashValue(*zero.Value()) ==
+		COptimizationContext::HashValue(*negative_zero.Value()));
+	// Simulate a completed, failed budget request; it must not poison a
+	// later wider or unbounded search in the same group and properties.
+	small->SetState(COptimizationContext::estOptimizing);
+	small->SetState(COptimizationContext::estOptimized);
+	GPOS_UNITTEST_ASSERT(small->PccBest() == nullptr);
+	small->AddRef(); // group owns inserted contexts
+	GPOS_UNITTEST_ASSERT(group->PocInsert(small.Value()) == small.Value());
+	GPOS_UNITTEST_ASSERT(group->PocInsert(repeated.Value()) == small.Value());
+	for (auto *context : {wide.Value(), unlimited.Value(), other_stats.Value()})
+	{
+		GPOS_UNITTEST_ASSERT(!small->Matches(context));
+		context->AddRef();
+		GPOS_UNITTEST_ASSERT(group->PocInsert(context) == context);
+	}
+	GPOS_UNITTEST_ASSERT(!unlimited->FBounded());
+	return GPOS_OK;
 }
 
 GPOS_RESULT

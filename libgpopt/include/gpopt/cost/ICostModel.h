@@ -363,6 +363,11 @@ public:
 	virtual CCost Cost(CExpressionHandle &exprhdl,
 					   const SCostingInfo *pci) const = 0;
 
+	// Certificate for accumulated-cost bounding: full cost is at least the
+	// sum of complete child costs. Unknown models/operators cannot transfer
+	// a remaining budget; e.g. LIMIT can discount its child's work.
+	virtual BOOL FChildrenCostFloor(CExpressionHandle &) const { return false; }
+
 	// cost model type
 	virtual ECostModelType Ecmt() const = 0;
 

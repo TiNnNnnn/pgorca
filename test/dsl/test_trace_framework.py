@@ -83,6 +83,9 @@ class TraceFrameworkTest(unittest.TestCase):
         self.assertIn('trace_dsl_rule=off', candidate)
         self.assertIn('dphyper_verify=on', join_settings(True, 10000, verify=True))
         self.assertIn('enable_space_pruning=on', candidate)
+        self.assertIn('enable_cost_budget=off', candidate)
+        self.assertEqual(candidate.replace('enable_cost_budget=off', 'enable_cost_budget=on'),
+                         join_settings(True, 10000, dsl=True, cost_budget=True))
         self.assertEqual(candidate.replace('enable_space_pruning=on', 'enable_space_pruning=off'),
                          join_settings(True, 10000, dsl=True, space_pruning=False))
 
@@ -90,25 +93,28 @@ class TraceFrameworkTest(unittest.TestCase):
         def fake_psql(binary, socket, port, database, sql, timeout):
             if 'enable_orca=off' not in sql:
                 self.assertIn('enable_space_pruning=off', sql)
+                self.assertIn('enable_cost_budget=on', sql)
             if 'COPY (' in sql:
                 return ('2,2\n' if 'enable_orca=off' in sql else '1,1\n', '', 0, 1)
             return (json.dumps([{
                 'Plan': {'Node Type': 'Result', 'Total Cost': 1},
                 'Optimizer': 'pg_orca', 'Planning Time': 1, 'Execution Time': 1,
-            }]), 'DPHyperVerify: status=equal', 0, 1)
+            }]), 'DPHyperVerify: status=equal\nCostBudgetSummary: feasible=2 bounded_failure=3 pruned=4', 0, 1)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             query = root / 'query.sql'
             query.write_text('SELECT 1')
             args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True,
-                                   no_space_pruning=True)
+                                   no_space_pruning=True, cost_budget=True)
             with patch('compare_join_enumerators.psql', side_effect=fake_psql):
                 result = compare_joins(args, Path('psql'), root, 'test', query, root / 'output')
             self.assertTrue(result['rows_equal'])
             self.assertFalse(result['postgres_equal'])
             self.assertTrue(result['failures'])
             self.assertFalse(result['space_pruning'])
+            self.assertEqual(result['audit']['top_down']['cost_budget_events'],
+                             {'feasible': 2, 'bounded_failure': 3, 'pruned': 4})
 
     def test_join_comparison_requires_completed_audit(self) -> None:
         plan = json.dumps([{'Plan': {'Node Type': 'Result'}, 'Optimizer': 'pg_orca'}])

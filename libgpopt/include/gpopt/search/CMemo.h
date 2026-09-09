@@ -141,7 +141,8 @@ public:
 	// extract a plan that delivers the given required properties
 	CExpression *PexprExtractPlan(CMemoryPool *mp, CGroup *pgroupRoot,
 								  CReqdPropPlan *prppInput,
-								  ULONG ulSearchStages);
+								  ULONG ulSearchStages,
+								  COptimizationContext *request = nullptr);
 
 	// merge duplicate groups
 	void GroupMerge();

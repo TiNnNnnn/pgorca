@@ -30,7 +30,7 @@ VERIFY = re.compile(r"DPHyperVerify: status=(\w+)")
 
 
 def settings(top_down: bool, budget: int, verify: bool = False, dsl: bool = False,
-             space_pruning: bool = True) -> str:
+             space_pruning: bool = True, cost_budget: bool = False) -> str:
     return f"""
 LOAD 'pg_orca';
 SET pg_orca.enable_orca=on;
@@ -42,6 +42,7 @@ SET pg_orca.dphyper_top_down={'on' if top_down else 'off'};
 SET pg_orca.dphyper_verify={'on' if verify else 'off'};
 SET pg_orca.dphyper_pair_budget={budget};
 SET pg_orca.enable_space_pruning={'on' if space_pruning else 'off'};
+SET pg_orca.enable_cost_budget={'on' if cost_budget else 'off'};
 SET pg_orca.trace_fallback=on;
 SET optimizer_print_xform=off;
 SET optimizer_print_xform_results=off;
@@ -65,9 +66,10 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
     timings = {mode: [] for mode in ("bottom_up", "top_down")}
     failures = []
     space_pruning = not getattr(args, 'no_space_pruning', False)
+    cost_budget = getattr(args, 'cost_budget', False)
     for mode in timings:
         base = settings(mode == "top_down", args.pair_budget, verify=True, dsl=args.dsl,
-                        space_pruning=space_pruning)
+                        space_pruning=space_pruning, cost_budget=cost_budget)
         stdout, stderr, rc, _ = psql(binary, socket, args.port, database,
             base + "SET optimizer_print_xform=on; SET optimizer_print_xform_results=on;"
             + "SET optimizer_print_plan=on;"
@@ -78,6 +80,8 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
         plans[mode] = plan_tree(stdout)
         statuses = Counter(VERIFY.findall(stderr))
         cost = re.search(r"Physical plan:\s*\n[^\n]*cost:([0-9.eE+-]+)", stderr)
+        budget_summary = re.search(
+            r"CostBudgetSummary: feasible=(\d+) bounded_failure=(\d+) pruned=(\d+)", stderr)
         audits[mode] = {
             "rc": rc, "optimizer": optimizer_name(stdout),
             "optimizer_cost": float(cost[1]) if cost else None,
@@ -85,6 +89,9 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
             "verification": dict(statuses),
             "events": parse_dphyper_events(stderr),
             "xforms": produced_xforms(stderr),
+            "cost_budget_events": dict(zip(
+                ("feasible", "bounded_failure", "pruned"),
+                map(int, budget_summary.groups()))) if budget_summary else {},
         }
         if rc or plans[mode] is None or optimizer_name(stdout) == "postgres":
             failures.append(f"{mode}: audit failed or PostgreSQL fallback")
@@ -99,7 +106,7 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
             for mode in modes:
                 stdout, stderr, rc, _ = psql(binary, socket, args.port, database,
                     settings(mode == "top_down", args.pair_budget, dsl=args.dsl,
-                             space_pruning=space_pruning)
+                             space_pruning=space_pruning, cost_budget=cost_budget)
                     + f"EXPLAIN (ANALYZE, TIMING OFF, BUFFERS OFF, FORMAT JSON) {sql};",
                     args.timeout)
                 planning, execution = explain_times(stdout)
@@ -114,7 +121,7 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
         for mode in timings:
             stdout, stderr, rc, _ = psql(binary, socket, args.port, database,
                 settings(mode == "top_down", args.pair_budget, dsl=args.dsl,
-                         space_pruning=space_pruning)
+                         space_pruning=space_pruning, cost_budget=cost_budget)
                 + f"COPY ({sql}) TO STDOUT WITH (FORMAT text);", args.timeout)
             (output / f"{mode}.rows.txt").write_text(stdout)
             if rc:
@@ -150,6 +157,7 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
     plan_equal = plans["bottom_up"] is not None and plans["bottom_up"] == plans["top_down"]
     result = {
         "space_pruning": space_pruning,
+        "cost_budget": cost_budget,
         "query": str(query), "failures": failures, "rows_equal": rows_equal,
         "postgres_equal": postgres_equal,
         "row_count": sum(rows.get("bottom_up", {}).values()),
@@ -174,6 +182,8 @@ def main() -> int:
     parser.add_argument("--dsl", action="store_true", help="enable the same DSL library in both arms")
     parser.add_argument("--no-space-pruning", action="store_true",
                         help="disable existing physical cost pruning in both arms for correctness audits")
+    parser.add_argument("--cost-budget", action="store_true",
+                        help="enable experimental physical cost budgets in both arms")
     parser.add_argument("--port", type=int, default=60474)
     parser.add_argument("--output", type=Path, default=ROOT.parent.parent / "output/dphyper-counter-strike/comparison")
     args = parser.parse_args()
@@ -226,6 +236,7 @@ def main() -> int:
     summary = {
         "queries": len(results), "pair_budget": args.pair_budget, "repeats": args.repeats,
         "dsl": args.dsl, "space_pruning": not args.no_space_pruning,
+        "cost_budget": args.cost_budget,
         "rows_equal": sum(result["rows_equal"] for result in results),
         "postgres_equal": sum(result["postgres_equal"] for result in results),
         "cuts_verified": sum(result["cuts_verified"] for result in results),

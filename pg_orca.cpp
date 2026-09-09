@@ -183,6 +183,7 @@ bool  pg_orca_enable_dphyper = false;
 bool  pg_orca_dphyper_shadow = false;
 bool  pg_orca_dphyper_top_down = false;
 bool  pg_orca_enable_space_pruning = true;
+bool  pg_orca_enable_cost_budget = false;
 bool  pg_orca_dphyper_verify = false;
 int   pg_orca_dphyper_edge_budget = 100000;
 int   pg_orca_dphyper_pair_budget = 100;
@@ -919,6 +920,16 @@ void _PG_init(void)
         "comparisons are reported as inconclusive.",
         NULL,
         &pg_orca_dphyper_verify,
+        false,
+        PGC_USERSET,
+        0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "pg_orca.enable_cost_budget",
+        "Propagate physical cost ceilings through certified additive operators. "
+        "Experimental; requires space pruning and a single search stage.",
+        NULL,
+        &pg_orca_enable_cost_budget,
         false,
         PGC_USERSET,
         0, NULL, NULL, NULL);

@@ -126,7 +126,7 @@ public:
 	BOOL FScheduleGroupExpressions(CSchedulerContext *psc) override;
 
 	// schedule a new group optimization job
-	static void ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
+	static COptimizationContext *ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
 							CGroupExpression *pgexprOrigin,
 							COptimizationContext *poc, CJob *pjParent);
 

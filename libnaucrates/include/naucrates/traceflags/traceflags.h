@@ -258,6 +258,7 @@ enum EOptTraceFlag
 	EopttraceDPHyperShadow = 103053,
 	EopttraceDPHyperTopDown = 103054,
 	EopttraceDPHyperVerify = 103055,
+	EopttraceEnableCostBudget = 103056,
 
 	///////////////////////////////////////////////////////
 	///////////////////// statistics flags ////////////////

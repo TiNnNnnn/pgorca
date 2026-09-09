@@ -12,6 +12,9 @@
 #ifndef GPOPT_COptimizationContext_H
 #define GPOPT_COptimizationContext_H
 
+#include <cmath>
+#include <functional>
+
 #include "gpos/base.h"
 #include "gpos/common/DbgPrintMixin.h"
 #include "gpos/task/CAutoTraceFlag.h"
@@ -89,6 +92,10 @@ private:
 	// index of search stage where context is generated
 	ULONG m_ulSearchStageIndex{0};
 
+	// Immutable request ceiling; -1 means unbounded. A completed bounded
+	// failure must never answer an unbounded or wider-budget request.
+	DOUBLE m_cost_limit{-1.0};
+
 	// best cost context under the optimization context
 	CCostContext *m_pccBest{nullptr};
 
@@ -136,22 +143,35 @@ public:
 			prprel,	 // required relational props -- used during stats derivation
 		IStatisticsArray
 			*stats_ctxt,  // stats of previously optimized expressions
-		ULONG ulSearchStageIndex)
+		ULONG ulSearchStageIndex, DOUBLE cost_limit = -1.0)
 		: m_mp(mp),
 		  m_pgroup(pgroup),
 		  m_prpp(prpp),
 		  m_prprel(prprel),
 		  m_pdrgpstatCtxt(stats_ctxt),
-		  m_ulSearchStageIndex(ulSearchStageIndex)
+		  m_ulSearchStageIndex(ulSearchStageIndex), m_cost_limit(cost_limit)
 	{
 		GPOS_ASSERT(nullptr != pgroup);
 		GPOS_ASSERT(nullptr != prpp);
 		GPOS_ASSERT(nullptr != prprel);
 		GPOS_ASSERT(nullptr != stats_ctxt);
+		GPOS_ASSERT(std::isfinite(cost_limit) &&
+					(cost_limit == -1.0 || cost_limit >= 0.0));
 	}
 
 	// dtor
 	~COptimizationContext() override;
+
+	DOUBLE
+	CostLimit() const
+	{
+		return m_cost_limit;
+	}
+	BOOL
+	FBounded() const
+	{
+		return m_cost_limit >= 0.0;
+	}
 
 	// best group expression accessor
 	CGroupExpression *PgexprBest() const;
@@ -275,7 +295,11 @@ public:
 	{
 		GPOS_ASSERT(nullptr != oc.Prpp());
 
-		return oc.Prpp()->HashValue();
+		const ULONG properties = oc.Prpp()->HashValue();
+		// Keep native unbounded buckets unchanged. Distinct budget requests
+		// must not all land in one property bucket (quadratic debug lookups).
+		return oc.FBounded() ? gpos::CombineHashes(properties,
+			static_cast<ULONG>(std::hash<DOUBLE>{}(oc.CostLimit()))) : properties;
 	}
 
 	// equality function for cost contexts hash table

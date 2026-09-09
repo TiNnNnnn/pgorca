@@ -112,7 +112,8 @@ COptimizationContext::Matches(const COptimizationContext *poc) const
 	GPOS_ASSERT(nullptr != poc);
 
 	if (m_pgroup != poc->Pgroup() ||
-		m_ulSearchStageIndex != poc->UlSearchStageIndex())
+		m_ulSearchStageIndex != poc->UlSearchStageIndex() ||
+		m_cost_limit != poc->CostLimit())
 	{
 		return false;
 	}
@@ -126,7 +127,8 @@ COptimizationContext::Matches(const COptimizationContext *poc) const
 		return nullptr == prppFst && nullptr == prppSnd;
 	}
 
-	return prppFst->Equals(prppSnd);
+	return prppFst->Equals(prppSnd) &&
+		(!FBounded() || FEqualForStats(this, poc));
 }
 
 
@@ -455,6 +457,10 @@ COptimizationContext::OsPrintWithPrefix(IOstream &os,
 	if (nullptr != PgexprBest())
 	{
 		os << PgexprBest()->Id();
+	}
+	if (FBounded())
+	{
+		os << " cost_limit=" << m_cost_limit;
 	}
 	os << std::endl;
 

@@ -28,6 +28,7 @@ extern bool pg_orca_enable_dphyper;
 extern bool pg_orca_dphyper_shadow;
 extern bool pg_orca_dphyper_top_down;
 extern bool pg_orca_enable_space_pruning;
+extern bool pg_orca_enable_cost_budget;
 extern bool pg_orca_dphyper_verify;
 // pg_orca.dsl_only_xforms / pg_orca.trace_dsl_rule (pg_orca.cpp): scoped
 // native-xform suppression and per-rule attribution for replacement tests.
@@ -215,6 +216,8 @@ CConfigParamMapping::SConfigMappingElem CConfigParamMapping::m_elements[] = {
 
 	{EopttraceEnableSpacePruning, &pg_orca_enable_space_pruning,
 	 false, GPOS_WSZ_LIT("Enable space pruning in optimizer.")},
+	{EopttraceEnableCostBudget, &pg_orca_enable_cost_budget,
+	 false, GPOS_WSZ_LIT("Enable physical cost budget propagation.")},
 
 	{EopttraceForceMultiStageAgg, &force_multistage_agg,
 	 false, GPOS_WSZ_LIT("Force optimizer to always pick multistage aggregates.")},
