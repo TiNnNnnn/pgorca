@@ -137,8 +137,9 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
     costs = {mode: plan.get("Total Cost") if plan else None for mode, plan in plans.items()}
     bounded = any(audit["verification"].get("inconclusive_budget") for audit in audits.values())
     cuts_verified = not bounded and all(
+        audit["rc"] == 0 and plans[mode] is not None and audit["optimizer"] != "postgres" and
         audit["verification"].get("equal", 0) > 0 and
-        not audit["verification"].get("mismatch", 0) for audit in audits.values()
+        not audit["verification"].get("mismatch", 0) for mode, audit in audits.items()
     )
     plan_equal = plans["bottom_up"] is not None and plans["bottom_up"] == plans["top_down"]
     result = {

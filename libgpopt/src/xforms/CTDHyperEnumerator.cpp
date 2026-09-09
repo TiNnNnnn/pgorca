@@ -31,6 +31,62 @@ AddAdjacent(std::vector<std::vector<ULONG>> *adj, ULONG x, ULONG y)
 	}
 }
 
+// Tarjan's vertex-biconnected blocks, including bridges as two-vertex
+// blocks. DFS intervals also identify exactly which vertices a separating
+// articulation is mandatory for (Counter Strike, Sec. 4.5.2).
+struct SBlockInfo
+{
+	std::vector<ULONG> discovery, low, end, parent, order;
+	std::vector<std::vector<ULONG>> blocks;
+
+	SBlockInfo(const std::vector<std::vector<ULONG>> &adj, ULONG start)
+		: discovery(adj.size(), 0), low(adj.size(), 0), end(adj.size(), 0),
+		  parent(adj.size(), adj.size())
+	{
+		std::vector<std::pair<ULONG, ULONG>> stack;
+		std::function<void(ULONG)> visit = [&](ULONG v)
+		{
+			GPOS_CHECK_ABORT;
+			GPOS_CHECK_STACK_SIZE;
+			order.push_back(v);
+			discovery[v] = low[v] = order.size();
+			for (ULONG next : adj[v])
+			{
+				if (0 == discovery[next])
+				{
+					parent[next] = v;
+					stack.emplace_back(v, next);
+					visit(next);
+					low[v] = std::min(low[v], low[next]);
+					if (low[next] >= discovery[v])
+					{
+						std::vector<ULONG> block;
+						std::pair<ULONG, ULONG> edge;
+						do
+						{
+							edge = stack.back();
+							stack.pop_back();
+							block.push_back(edge.first);
+							block.push_back(edge.second);
+						} while (edge != std::make_pair(v, next));
+						std::sort(block.begin(), block.end());
+						block.erase(std::unique(block.begin(), block.end()),
+									block.end());
+						blocks.push_back(std::move(block));
+					}
+				}
+				else if (next != parent[v] && discovery[next] < discovery[v])
+				{
+					stack.emplace_back(v, next);
+					low[v] = std::min(low[v], discovery[next]);
+				}
+			}
+			end[v] = order.size();
+		};
+		visit(start);
+	}
+};
+
 // Enumerate connected bipartitions, keeping the smallest vertex on the left.
 // When growing the left disconnects its complement, a connected final right
 // must be contained in exactly one component. Absorb the other components
@@ -38,10 +94,11 @@ AddAdjacent(std::vector<std::vector<ULONG>> *adj, ULONG x, ULONG y)
 BOOL
 Cuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
 	 const CBitSet *all, const CBitSet *left, const CBitSet *excluded,
-	 const CTDHyperEnumerator::CutCallback &callback)
+	 const CTDHyperEnumerator::CutCallback &callback, ULONG *calls)
 {
 	GPOS_CHECK_ABORT;
 	GPOS_CHECK_STACK_SIZE;
+	++*calls;
 	CAutoRef<CBitSet> remaining(GPOS_NEW(mp) CBitSet(mp, *all));
 	remaining->Difference(left);
 	if (0 == remaining->Size())
@@ -52,7 +109,7 @@ Cuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
 	{
 		CAutoRef<CBitSet> component(GPOS_NEW(mp) CBitSet(mp));
 		std::vector<ULONG> queue{First(remaining.Value())};
-		(void) component->ExchangeSet(queue[0]);
+		(void)component->ExchangeSet(queue[0]);
 		for (size_t pos = 0; pos < queue.size(); ++pos)
 		{
 			for (ULONG next : adj[queue[pos]])
@@ -76,7 +133,7 @@ Cuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
 		{
 			CAutoRef<CBitSet> grown(GPOS_NEW(mp) CBitSet(mp, *all));
 			grown->Difference(component.Value());
-			if (Cuts(mp, adj, all, grown.Value(), excluded, callback))
+			if (Cuts(mp, adj, all, grown.Value(), excluded, callback, calls))
 			{
 				return true;
 			}
@@ -93,9 +150,9 @@ Cuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
 	{
 		for (ULONG next : adj[it.Bit()])
 		{
-			if (!left->Get(next) && !excluded->Get(next))
+			if (all->Get(next) && !left->Get(next) && !excluded->Get(next))
 			{
-				(void) frontier->ExchangeSet(next);
+				(void)frontier->ExchangeSet(next);
 			}
 		}
 	}
@@ -104,12 +161,94 @@ Cuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
 	while (candidates.Advance())
 	{
 		CAutoRef<CBitSet> grown(GPOS_NEW(mp) CBitSet(mp, *left));
-		(void) grown->ExchangeSet(candidates.Bit());
-		if (Cuts(mp, adj, all, grown.Value(), blocked.Value(), callback))
+		(void)grown->ExchangeSet(candidates.Bit());
+		if (Cuts(mp, adj, all, grown.Value(), blocked.Value(), callback, calls))
 		{
 			return true;
 		}
-		(void) blocked->ExchangeSet(candidates.Bit());
+		(void)blocked->ExchangeSet(candidates.Bit());
+	}
+	return false;
+}
+
+// A connected bipartition cuts edges in exactly one biconnected block:
+// cutting two blocks would disconnect a side at their separating articulation.
+// Every branch outside that block must follow its unique attachment vertex.
+// Enumerate each block once and expand the attachments, rather than repeatedly
+// growing cuts through the whole block-cut tree. This is a graph-aware
+// partitioner optimization, not a cost-based restriction of the join space.
+BOOL
+BlockCuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
+		  const CBitSet *nodes, const SBlockInfo &info,
+		  const CTDHyperEnumerator::CutCallback &callback,
+		  CTDHyperEnumerator::SStats *stats)
+{
+	for (const auto &block : info.blocks)
+	{
+		GPOS_CHECK_ABORT;
+		++stats->m_block_partitions;
+		CAutoRef<CBitSet> all(GPOS_NEW(mp) CBitSet(mp));
+		for (ULONG v : block)
+		{
+			(void)all->ExchangeSet(v);
+		}
+		const BOOL whole = block.size() == nodes->Size();
+		std::vector<ULONG> owner;
+		if (!whole)
+		{
+			owner.resize(adj.size(), adj.size());
+			std::vector<ULONG> queue(block);
+			for (ULONG v : block)
+			{
+				owner[v] = v;
+			}
+			for (size_t pos = 0; pos < queue.size(); ++pos)
+			{
+				const ULONG v = queue[pos];
+				for (ULONG next : adj[v])
+				{
+					if (owner[next] == adj.size())
+					{
+						owner[next] = owner[v];
+						queue.push_back(next);
+					}
+				}
+			}
+			GPOS_ASSERT(queue.size() == nodes->Size());
+		}
+		auto emit = [&](const CBitSet *l, const CBitSet *r)
+		{
+			if (whole)
+			{
+				return callback(l, r);
+			}
+			CAutoRef<CBitSet> left(GPOS_NEW(mp) CBitSet(mp));
+			CAutoRef<CBitSet> right(GPOS_NEW(mp) CBitSet(mp));
+			CBitSetIter it(*nodes);
+			while (it.Advance())
+			{
+				(void)(l->Get(owner[it.Bit()]) ? left : right)
+					->ExchangeSet(it.Bit());
+			}
+			return callback(left.Value(), right.Value());
+		};
+		CAutoRef<CBitSet> left(GPOS_NEW(mp) CBitSet(mp));
+		(void)left->ExchangeSet(block.front());
+		CAutoRef<CBitSet> excluded(GPOS_NEW(mp) CBitSet(mp));
+		if (2 == block.size())
+		{
+			// A bridge has exactly one cut; no branching or connectivity BFS.
+			(void)excluded->ExchangeSet(block.back());
+			if (emit(left.Value(), excluded.Value()))
+			{
+				return true;
+			}
+		}
+		else if (Cuts(mp, adj, all.Value(), left.Value(), excluded.Value(),
+					  emit, &stats->m_cut_calls))
+		{
+			return true;
+		}
 	}
 	return false;
 }
@@ -174,7 +313,10 @@ CTDHyperEnumerator::ComputeAdjacency()
 		{
 			auto &ids = it->second;
 			ids.erase(std::remove_if(ids.begin(), ids.end(),
-									 [&](ULONG id) { return assigned[id]; }),
+									 [&](ULONG id)
+									 {
+										 return assigned[id];
+									 }),
 					  ids.end());
 			if (ids.size() > largest)
 			{
@@ -221,8 +363,14 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes, const CutCallback &callback)
 	// its endpoints non-separable in this partition. Union-find merges
 	// overlapping compounds. Never contract a shared representative or a
 	// representative also supplied by a simple edge.
-	std::vector<ULONG> parent(n), discovery(n, 0), low(n, 0);
+	const SBlockInfo info(adj, First(nodes));
+	if (info.order.size() != nodes->Size())
+	{
+		return false;
+	}
+	std::vector<ULONG> parent(n);
 	std::iota(parent.begin(), parent.end(), 0);
+	BOOL has_compounds = false;
 	auto root = [&](ULONG v)
 	{
 		while (parent[v] != v)
@@ -242,79 +390,111 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes, const CutCallback &callback)
 			if (representative != other)
 			{
 				parent[other] = representative;
+				has_compounds = true;
 				++m_stats.m_compound_merges;
 			}
 		}
 	};
-	ULONG clock = 0;
-	std::function<void(ULONG, ULONG)> bridges = [&](ULONG v, ULONG prev)
+	for (ULONG next : info.order)
 	{
-		GPOS_CHECK_ABORT;
-		GPOS_CHECK_STACK_SIZE;
-		discovery[v] = low[v] = ++clock;
-		for (ULONG next : adj[v])
+		const ULONG v = info.parent[next];
+		if (v != n && info.low[next] > info.discovery[v])
 		{
-			if (next == prev)
+			const auto &ids = provenance.at(std::minmax(v, next));
+			if (1 == ids.size())
+			{
+				const auto *edge = m_graph->Edge(2 * ids[0]);
+				merge(edge->m_left);
+				merge(edge->m_right);
+			}
+		}
+	}
+	if (!has_compounds)
+	{
+		// Simple blocks already use original node ids: no union-find decoding
+		// or second adjacency construction is needed on this common path.
+		return BlockCuts(
+			m_mp, adj, nodes, info,
+			[&](const CBitSet *l, const CBitSet *r)
+			{
+				++m_stats.m_candidates;
+				return l->Get(First(nodes)) ? callback(l, r) : callback(r, l);
+			},
+			&m_stats);
+	}
+
+	// Sec. 4.5.2: enlarge a non-separable compound only with vertices on
+	// EVERY path between its members. A DFS child with low >= discovery[parent]
+	// separates its subtree from the rest at parent. Prefix counts test whether
+	// the compound intersects both sides, without a BFS per articulation or
+	// enumerating paths. Never absorb an optional route around a cycle.
+	std::vector<std::vector<ULONG>> compounds(n);
+	for (ULONG v : info.order)
+	{
+		compounds[root(v)].push_back(v);
+	}
+	for (const auto &compound : compounds)
+	{
+		if (compound.size() < 2)
+		{
+			continue;
+		}
+		GPOS_CHECK_ABORT;
+		std::vector<ULONG> count(info.order.size() + 1, 0);
+		for (ULONG v : compound)
+		{
+			count[info.discovery[v]] = 1;
+		}
+		std::partial_sum(count.begin(), count.end(), count.begin());
+		for (ULONG child : info.order)
+		{
+			const ULONG v = info.parent[child];
+			if (v == n || info.low[child] < info.discovery[v])
 			{
 				continue;
 			}
-			if (0 == discovery[next])
+			const ULONG inside =
+				count[info.end[child]] - count[info.discovery[child] - 1];
+			if (0 < inside && inside < compound.size() &&
+				root(v) != root(compound.front()))
 			{
-				bridges(next, v);
-				low[v] = std::min(low[v], low[next]);
-				if (low[next] > discovery[v])
-				{
-					const auto &ids = provenance.at(std::minmax(v, next));
-					if (1 == ids.size())
-					{
-						const auto *edge = m_graph->Edge(2 * ids[0]);
-						merge(edge->m_left);
-						merge(edge->m_right);
-					}
-				}
-			}
-			else
-			{
-				low[v] = std::min(low[v], discovery[next]);
+				parent[root(v)] = root(compound.front());
+				++m_stats.m_articulation_merges;
 			}
 		}
-	};
-	bridges(First(nodes), n);
-	if (clock != nodes->Size())
-	{
-		return false;
 	}
 	std::vector<std::vector<ULONG>> contracted(n);
 	CAutoRef<CBitSet> all(GPOS_NEW(m_mp) CBitSet(m_mp));
 	CBitSetIter it(*nodes);
 	while (it.Advance())
 	{
-		(void) all->ExchangeSet(root(it.Bit()));
+		(void)all->ExchangeSet(root(it.Bit()));
 		for (ULONG next : adj[it.Bit()])
 		{
 			AddAdjacent(&contracted, root(it.Bit()), root(next));
 		}
 	}
-	CAutoRef<CBitSet> left(GPOS_NEW(m_mp) CBitSet(m_mp));
-	(void) left->ExchangeSet(root(First(nodes)));
-	CAutoRef<CBitSet> excluded(GPOS_NEW(m_mp) CBitSet(m_mp));
-	return Cuts(
-		m_mp, contracted, all.Value(), left.Value(), excluded.Value(),
-		[&](const CBitSet *l, const CBitSet *)
+	auto emit = [&](const CBitSet *l, const CBitSet *)
+	{
+		CAutoRef<CBitSet> decoded_left(GPOS_NEW(m_mp) CBitSet(m_mp));
+		CAutoRef<CBitSet> decoded_right(GPOS_NEW(m_mp) CBitSet(m_mp));
+		CBitSetIter original(*nodes);
+		while (original.Advance())
 		{
-			CAutoRef<CBitSet> decoded_left(GPOS_NEW(m_mp) CBitSet(m_mp));
-			CAutoRef<CBitSet> decoded_right(GPOS_NEW(m_mp) CBitSet(m_mp));
-			CBitSetIter original(*nodes);
-			while (original.Advance())
-			{
-				CBitSet *side = l->Get(root(original.Bit()))
-									? decoded_left.Value()
-									: decoded_right.Value();
-				(void) side->ExchangeSet(original.Bit());
-			}
-			++m_stats.m_candidates;
-			return callback(decoded_left.Value(), decoded_right.Value());
-		});
+			CBitSet *side = l->Get(root(original.Bit()))
+								? decoded_left.Value()
+								: decoded_right.Value();
+			(void)side->ExchangeSet(original.Bit());
+		}
+		++m_stats.m_candidates;
+		// Block-local anchors need not be the original smallest vertex.
+		return decoded_left->Get(First(nodes))
+				   ? callback(decoded_left.Value(), decoded_right.Value())
+				   : callback(decoded_right.Value(), decoded_left.Value());
+	};
+	const SBlockInfo contracted_info(contracted, First(all.Value()));
+	return BlockCuts(m_mp, contracted, all.Value(), contracted_info, emit,
+					 &m_stats);
 }
 
 BOOL
@@ -377,8 +557,11 @@ CTDHyperEnumerator::Visit(const CBitSet *nodes)
 		}
 	}
 	++m_stats.m_subproblems;
-	if (Partition(nodes, [&](const CBitSet *l, const CBitSet *r)
-				  { return VisitPair(l, r); }))
+	if (Partition(nodes,
+				  [&](const CBitSet *l, const CBitSet *r)
+				  {
+					  return VisitPair(l, r);
+				  }))
 	{
 		return true;
 	}
@@ -404,7 +587,7 @@ CTDHyperEnumerator::Sweep(const std::vector<std::vector<ULONG>> &adj,
 		{
 			if (!nodes->Get(next) && !excluded->Get(next))
 			{
-				(void) frontier->ExchangeSet(next);
+				(void)frontier->ExchangeSet(next);
 			}
 		}
 	}
@@ -413,12 +596,12 @@ CTDHyperEnumerator::Sweep(const std::vector<std::vector<ULONG>> &adj,
 	while (candidates.Advance())
 	{
 		CAutoRef<CBitSet> grown(GPOS_NEW(m_mp) CBitSet(m_mp, *nodes));
-		(void) grown->ExchangeSet(candidates.Bit());
+		(void)grown->ExchangeSet(candidates.Bit());
 		if (Sweep(adj, grown.Value(), blocked.Value()))
 		{
 			return true;
 		}
-		(void) blocked->ExchangeSet(candidates.Bit());
+		(void)blocked->ExchangeSet(candidates.Bit());
 	}
 	return false;
 }
@@ -433,11 +616,31 @@ CTDHyperEnumerator::Enumerate()
 		{
 			return true;
 		}
-		(void) all->ExchangeSet(node);
+		(void)all->ExchangeSet(node);
 	}
 	if (0 == all->Size() || Visit(all.Value()))
 	{
 		return 0 != all->Size();
+	}
+	// In a connected simple graph every connected subset can be extended to
+	// the root: peel off the connected components of its complement one at a
+	// time. Complete top-down partitioning therefore already visited every
+	// subset, even with receiver filters (Visit runs before HasSeen). Complex
+	// hypergraphs do not have this extension property: keep their coverage
+	// sweep, including dead ends that later DSL rules can still observe.
+	BOOL simple = true;
+	for (ULONG id = 0; id < m_graph->LogicalEdgeCount(); ++id)
+	{
+		const auto *edge = m_graph->Edge(2 * id);
+		if (edge->m_left->Size() != 1 || edge->m_right->Size() != 1)
+		{
+			simple = false;
+			break;
+		}
+	}
+	if (simple && m_receiver->HasSeen(all.Value()))
+	{
+		return false;
 	}
 	std::vector<std::vector<ULONG>> adj(m_graph->NodeCount());
 	for (auto link : m_representatives)
@@ -448,12 +651,12 @@ CTDHyperEnumerator::Enumerate()
 	for (ULONG node = 0; node < m_graph->NodeCount(); ++node)
 	{
 		CAutoRef<CBitSet> seed(GPOS_NEW(m_mp) CBitSet(m_mp));
-		(void) seed->ExchangeSet(node);
+		(void)seed->ExchangeSet(node);
 		if (Sweep(adj, seed.Value(), excluded.Value()))
 		{
 			return true;
 		}
-		(void) excluded->ExchangeSet(node);
+		(void)excluded->ExchangeSet(node);
 	}
 	return false;
 }

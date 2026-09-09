@@ -103,6 +103,23 @@ class TraceFrameworkTest(unittest.TestCase):
             self.assertFalse(result['postgres_equal'])
             self.assertTrue(result['failures'])
 
+    def test_join_comparison_requires_completed_audit(self) -> None:
+        plan = json.dumps([{'Plan': {'Node Type': 'Result'}, 'Optimizer': 'pg_orca'}])
+        for stdout, rc in ((plan, 3), ('', 0), (plan.replace('pg_orca', 'postgres'), 0)):
+            with self.subTest(stdout=stdout, rc=rc), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                query = root / 'query.sql'
+                query.write_text('SELECT 1')
+                args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True)
+                # A timeout/fallback may follow many successfully verified
+                # regions. The successful prefix is not a completed audit.
+                with patch('compare_join_enumerators.psql', return_value=(
+                    stdout, 'DPHyperVerify: status=equal', rc, 1,
+                )):
+                    result = compare_joins(args, Path('psql'), root, 'test', query, root / 'output')
+                self.assertFalse(result['cuts_verified'])
+                self.assertTrue(result['failures'])
+
     def test_runtime_rule_edges_merge_as_multigraph_evidence(self) -> None:
         base = {
             "schema_version": 1,

@@ -1247,7 +1247,8 @@ CJobJoinEnumeration::FEnumerateRegion(
 			"cost_cache_exact_stats_hits=%d "
 			"cost_cache_exact_stats_misses=%d mode=%s algorithm=%s "
 			"td_subproblems=%d td_cache_hits=%d td_candidates=%d "
-			"td_rejected=%d td_compound_merges=%d",
+			"td_rejected=%d td_compound_merges=%d td_articulation_merges=%d "
+			"td_block_partitions=%d td_cut_calls=%d",
 			m_pgexpr->Pgroup()->Id(), m_pgexpr->Pop()->SzId(), node_count,
 			region->GeneratedEdgeCount(), region->CartesianEdgeCount(),
 			dependency_count, plan->PairCount(), plan->SeenCount(), fingerprint_hash,
@@ -1267,7 +1268,9 @@ CJobJoinEnumeration::FEnumerateRegion(
 			GPOS_FTRACE(EopttraceDPHyperShadow) ? "shadow" : "replacement",
 			top_down ? "top_down" : "bottom_up",
 			td_stats.m_subproblems, td_stats.m_cache_hits, td_stats.m_candidates,
-			td_stats.m_rejected, td_stats.m_compound_merges);
+			td_stats.m_rejected, td_stats.m_compound_merges,
+			td_stats.m_articulation_merges, td_stats.m_block_partitions,
+			td_stats.m_cut_calls);
 	}
 	PublishRegionStatus(region_members, CGroupExpression::EdphSucceeded);
 	return true;

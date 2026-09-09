@@ -1,7 +1,9 @@
 //---------------------------------------------------------------------------
 // Top-down hypergraph partitioning using the framework of Fender/Moerkotte,
 // "Counter Strike" (VLDB 2013), Fig. 6. The graph-aware partitioner is an
-// independent connected-set branch traversal, not a port of MinCutBranch.
+// independent connected-set branch traversal within biconnected blocks,
+// not a port of MinCutBranch. Non-separable hypernodes absorb only mandatory
+// articulation connectors before partitioning (Sec. 4.5.2).
 // No estimated-cost pruning is performed by this logical enumerator.
 //---------------------------------------------------------------------------
 #ifndef GPOPT_CTDHyperEnumerator_H
@@ -25,6 +27,9 @@ public:
 		ULONG m_candidates = 0;
 		ULONG m_rejected = 0;
 		ULONG m_compound_merges = 0;
+		ULONG m_articulation_merges = 0;
+		ULONG m_block_partitions = 0;
+		ULONG m_cut_calls = 0;
 	};
 
 private:

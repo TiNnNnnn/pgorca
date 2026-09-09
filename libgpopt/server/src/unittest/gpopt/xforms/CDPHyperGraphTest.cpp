@@ -768,12 +768,12 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 	CAutoMemoryPool amp;
 	CMemoryPool *mp = amp.Pmp();
 	uint32_t random = 0x9e3779b9U;
-	for (ULONG graph_id = 0; graph_id < 512; ++graph_id)
+	for (ULONG graph_id = 0; graph_id < 512 + 64 * 15; ++graph_id)
 	{
 		CDPHyperGraph graph(mp, node_count);
 		std::vector<SMaskEdge> edges;
 		std::vector<BOOL> selected(catalog.size(), false);
-		const ULONG edge_count = graph_id % 9;
+		const ULONG edge_count = graph_id < 512 ? graph_id % 9 : 0;
 		for (ULONG edge_id = 0; edge_id < edge_count; ++edge_id)
 		{
 			random ^= random << 13;
@@ -787,6 +787,34 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 			selected[index] = true;
 			const SMaskEdge edge = catalog[index];
 			edges.push_back(edge);
+		}
+		if (graph_id >= 512)
+		{
+			// Every four-node simple core and every nonempty endpoint joined
+			// to a fifth leaf. Exercise mandatory articulation connectors,
+			// optional cyclic routes, disconnected endpoints and shared reps
+			// against the independent oracle, not merely the DPHyp baseline.
+			const ULONG core = (graph_id - 512) / 15;
+			ULONG bit = 0;
+			for (ULONG l = 0; l < 4; ++l)
+			{
+				for (ULONG r = l + 1; r < 4; ++r, ++bit)
+				{
+					if (core & (ULONG(1) << bit))
+					{
+						edges.push_back({ULONG(1) << l, ULONG(1) << r});
+					}
+				}
+			}
+			edges.push_back({1 + (graph_id - 512) % 15, 16});
+			if (0 == graph_id % 7)
+			{
+				edges.push_back(edges.back());
+			}
+		}
+		for (ULONG edge_id = 0; edge_id < edges.size(); ++edge_id)
+		{
+			const SMaskEdge edge = edges[edge_id];
 			CAutoRef<CBitSet> left(PbsFromMask(mp, edge.m_left));
 			CAutoRef<CBitSet> right(PbsFromMask(mp, edge.m_right));
 			graph.AddEdge(left.Value(), right.Value(), edge_id);
@@ -970,6 +998,107 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 			}));
 		GPOS_UNITTEST_ASSERT(1 == calls);
 	}
+	// Sec. 4.5.2: the endpoint {0,3} of a bridge hyperedge is inseparable.
+	// On a path its mandatory connector vertices must be absorbed. In a
+	// diamond, either route is optional and MUST remain independently usable.
+	for (ULONG diamond = 0; diamond < 2; ++diamond)
+	{
+		CDPHyperGraph graph(mp, 5);
+		if (diamond)
+		{
+			AddSimpleEdge(mp, &graph, 0, 1, 0);
+			AddSimpleEdge(mp, &graph, 1, 3, 1);
+			AddSimpleEdge(mp, &graph, 0, 2, 2);
+			AddSimpleEdge(mp, &graph, 2, 3, 3);
+		}
+		else
+		{
+			for (ULONG v = 0; v < 3; ++v)
+			{
+				AddSimpleEdge(mp, &graph, v, v + 1, v);
+			}
+		}
+		CAutoRef<CBitSet> endpoint(Pbs(mp, {0, 3})), leaf(Pbs(mp, {4}));
+		graph.AddEdge(endpoint.Value(), leaf.Value(), 4);
+		CDPHyperPlan bottom_up(mp, 1000), top_down(mp, 1000);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 31));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				++calls;
+				GPOS_UNITTEST_ASSERT(l->Get(0) && l->Get(3));
+				if (!diamond)
+				{
+					GPOS_UNITTEST_ASSERT(FSet(l, {0, 1, 2, 3}) && FSet(r, {4}));
+				}
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT((diamond ? 3 : 1) == calls);
+		GPOS_UNITTEST_ASSERT((diamond ? 0 : 2) == td.Stats().m_articulation_merges);
+		GPOS_UNITTEST_ASSERT(0 == td.Stats().m_cut_calls);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// Three cyclic blocks linked at articulation vertices: all nine root
+	// cuts survive, with every off-block branch following its attachment.
+	{
+		CDPHyperGraph graph(mp, 7);
+		for (ULONG base = 0; base < 6; base += 2)
+		{
+			AddSimpleEdge(mp, &graph, base, base + 1, base * 3);
+			AddSimpleEdge(mp, &graph, base + 1, base + 2, base * 3 + 1);
+			AddSimpleEdge(mp, &graph, base, base + 2, base * 3 + 2);
+		}
+		CDPHyperPlan bottom_up(mp, 10000), top_down(mp, 10000);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 127));
+		std::set<ULONG> cuts;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				GPOS_UNITTEST_ASSERT(l->Get(0) && l->IsDisjoint(r));
+				GPOS_UNITTEST_ASSERT(l->Size() + r->Size() == 7);
+				ULONG mask = 0;
+				CBitSetIter it(*l);
+				while (it.Advance())
+				{
+					mask |= ULONG(1) << it.Bit();
+				}
+				GPOS_UNITTEST_ASSERT(cuts.insert(mask).second);
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(9 == cuts.size());
+		GPOS_UNITTEST_ASSERT(3 == td.Stats().m_block_partitions);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// A star has many connected subsets but just n-1 root cuts. A block
+	// decomposition emits those bridges directly, with zero cut search calls.
+	// It also preserves immediate callback cancellation across block boundaries.
+	{
+		CDPHyperGraph graph(mp, 12);
+		for (ULONG v = 1; v < 12; ++v)
+		{
+			AddSimpleEdge(mp, &graph, 0, v, v);
+		}
+		CDPHyperPlan unused(mp, 1);
+		CTDHyperEnumerator td(mp, &graph, &unused);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 4095));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				++calls;
+				GPOS_UNITTEST_ASSERT(l->Get(0) && 11 == l->Size() && 1 == r->Size());
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(11 == calls && 0 == td.Stats().m_cut_calls);
+		calls = 0;
+		GPOS_UNITTEST_ASSERT(td.Partition(all.Value(),
+			[&](const CBitSet *, const CBitSet *) { return ++calls == 2; }));
+		GPOS_UNITTEST_ASSERT(2 == calls);
+	}
 	// Repeatable small enumeration comparison; never assert timing. This
 	// measures the eager adapter, including preparation and the coverage sweep.
 	for (ULONG shape = 0; shape < 4; ++shape)
@@ -1008,8 +1137,10 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 			ULONG td_us = clock.ElapsedUS();
 			GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
 			GPOS_TRACE_FORMAT("TDHyperBenchmark: shape=%d repeat=%d nodes=8 "
-				"pairs=%d bottom_up_us=%d top_down_us=%d", shape, repeat,
-				bottom_up.PairCount(), bu_us, td_us);
+				"pairs=%d bottom_up_us=%d top_down_us=%d blocks=%d "
+				"cut_calls=%d articulation_merges=%d", shape, repeat,
+				bottom_up.PairCount(), bu_us, td_us, td.Stats().m_block_partitions,
+				td.Stats().m_cut_calls, td.Stats().m_articulation_merges);
 		}
 	}
 	return GPOS_OK;
