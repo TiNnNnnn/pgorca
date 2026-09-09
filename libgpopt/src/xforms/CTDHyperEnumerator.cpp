@@ -407,6 +407,9 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes,
 	// its endpoints non-separable in this partition. Union-find merges
 	// overlapping compounds. Never contract a shared representative or a
 	// representative also supplied by a simple edge.
+	// Keep the bridge condition: at a non-bridge articulation, different
+	// complex exits can be alternatives. Contracting either exit's endpoint
+	// can lose valid cuts even without a simple edge into the separated block.
 	const SBlockInfo info(adj, First(nodes));
 	if (info.order.size() != nodes->Size())
 	{

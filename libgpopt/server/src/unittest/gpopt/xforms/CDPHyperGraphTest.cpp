@@ -1198,6 +1198,65 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
 		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
 	}
+	// Two cyclic blocks meet at 1. The mapped complex representatives are
+	// not bridges: keep all six candidates, including false cuts filtered by
+	// the original graph. Also exercise a simple bypass and shared provenance.
+	for (ULONG variant = 0; variant < 3; ++variant)
+	{
+		CDPHyperGraph graph(mp, 5);
+		AddSimpleEdge(mp, &graph, 0, 1, 0);
+		AddSimpleEdge(mp, &graph, 0, 2, 1);
+		AddSimpleEdge(mp, &graph, 1, 2, 2);
+		CAutoRef<CBitSet> endpoint(Pbs(mp, {1, 2}));
+		CAutoRef<CBitSet> three(Pbs(mp, {3})), four(Pbs(mp, {4}));
+		graph.AddEdge(endpoint.Value(), three.Value(), 3);
+		graph.AddEdge(endpoint.Value(), four.Value(), 4);
+		AddSimpleEdge(mp, &graph, 3, 4, 5);
+		if (1 == variant)
+		{
+			AddSimpleEdge(mp, &graph, 1, 3, 6);
+		}
+		else if (2 == variant)
+		{
+			graph.AddEdge(endpoint.Value(), three.Value(), 6);
+		}
+		CDPHyperPlan bottom_up(mp, 10000), top_down(mp, 10000);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 31));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *, const CBitSet *) { ++calls; return false; }));
+		GPOS_UNITTEST_ASSERT(6 == calls);
+		GPOS_UNITTEST_ASSERT(0 == td.Stats().m_compound_merges);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// Different complex exits from the same articulation are alternatives,
+	// not jointly mandatory endpoints. {2} can be separated because the
+	// other exit {1,5}->{4} still connects the remaining graph via {3,4}.
+	{
+		CDPHyperGraph graph(mp, 6);
+		const std::vector<SMaskEdge> edges = {
+			{1, 2}, {1, 4}, {2, 4}, {1, 32}, {2, 32},
+			{6, 8}, {34, 16}, {8, 16}};
+		for (ULONG id = 0; id < edges.size(); ++id)
+		{
+			CAutoRef<CBitSet> l(PbsFromMask(mp, edges[id].m_left));
+			CAutoRef<CBitSet> r(PbsFromMask(mp, edges[id].m_right));
+			graph.AddEdge(l.Value(), r.Value(), id);
+		}
+		CRecordingReceiver bottom_up(mp), top_down(mp);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		std::vector<INT> connected(64, -1);
+		GPOS_UNITTEST_ASSERT(FHyperConnected(59, edges, &connected));
+		GPOS_UNITTEST_ASSERT(bottom_up.HasPair(4, 59));
+		GPOS_UNITTEST_ASSERT(top_down.HasPair(4, 59));
+		GPOS_UNITTEST_ASSERT(bottom_up.HasPair(32, 31));
+		GPOS_UNITTEST_ASSERT(top_down.HasPair(32, 31));
+	}
 	// Three cyclic blocks linked at articulation vertices: all nine root
 	// cuts survive, with every off-block branch following its attachment.
 	{
