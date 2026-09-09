@@ -101,9 +101,6 @@ private:
 	// derive stats of owner group expression
 	void DeriveStats();
 
-	// return the number of rows per host
-	CDouble DRowsPerHost() const;
-
 	// for two cost contexts with join plans of the same cost, break the tie based on join depth,
 	// if tie-resolution succeeded, store a pointer to preferred cost context in output argument
 	static void BreakCostTiesForJoinPlans(const CCostContext *pccFst,
@@ -191,6 +188,9 @@ public:
 	{
 		return m_pgexprForStats;
 	}
+
+	// Row count used by costing for a partitioned plan, including skew.
+	CDouble DRowsPerHost() const;
 
 	// return stats of owner group expression
 	IStatistics *

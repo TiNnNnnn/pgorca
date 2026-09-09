@@ -14,6 +14,8 @@
 
 #include "gpdbcost/CCostModelPG.h"
 
+#include <cmath>
+
 #include "pg_config.h"	// for BLCKSZ (PG's compiled-in block size)
 #include "gpos/base.h"
 
@@ -3377,6 +3379,10 @@ CCostModelPG::Cost(CExpressionHandle &exprhdl, const SCostingInfo *pci) const
 	}
 
 	GPOS_ASSERT_IMP(FChildrenCostFloor(exprhdl), local.Get() >= 0.0);
+	GPOS_ASSERT_IMP(GPOS_FTRACE(EopttraceEnableCostBudget) &&
+		FChildrenCostFloor(exprhdl) && pci->NumRebinds() >= 1.0,
+		local.Get() >= CostLocalInputLowerBound(exprhdl, 0, pci->PdRows()[0]) +
+			CostLocalInputLowerBound(exprhdl, 1, pci->PdRows()[1]));
 	return CCost(children.Get() + local.Get());
 }
 
@@ -3387,6 +3393,30 @@ CCostModelPG::FChildrenCostFloor(CExpressionHandle &exprhdl) const
 	// local build/probe/qual/spill work. Other operators need separate audits:
 	// in particular CostLimit deliberately returns a negative local adjustment.
 	return CUtils::FHashJoin(exprhdl.Pop());
+}
+
+DOUBLE
+CCostModelPG::CostLocalInputLowerBound(CExpressionHandle &exprhdl,
+									 ULONG child_index, DOUBLE rows) const
+{
+	if (!FChildrenCostFloor(exprhdl) || child_index > 1 ||
+		!std::isfinite(rows) || rows < 0.0)
+	{
+		return 0.0;
+	}
+	const auto *join = CPhysicalHashJoin::PopConvert(exprhdl.Pop());
+	const DOUBLE keys = std::max(1.0,
+		static_cast<DOUBLE>(join->PdrgpexprInnerKeys()->Size()));
+	const ULONG build_child = exprhdl.Pop()->Eopid() ==
+		COperator::EopPhysicalLeftAntiSemiHashJoinBuildOuter ? 0 : 1;
+	// Exactly the build_cpu/probe_cpu terms in CostHashJoin. Qual evaluation,
+	// output and spill work are nonnegative, but depend on the other input.
+	const DOUBLE per_row = cpu_operator_cost * keys +
+		(child_index == build_child ? cpu_tuple_cost : 0.0);
+	const DOUBLE floor = per_row * rows;
+	// The sum of two input contributions must also respect CCost saturation.
+	return std::isfinite(floor) && floor > 0.0
+		? std::nextafter(std::min(floor, GPOS_FP_ABS_MAX / 2.0), 0.0) : 0.0;
 }
 
 // EOF

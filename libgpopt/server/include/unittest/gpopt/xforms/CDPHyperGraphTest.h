@@ -28,6 +28,7 @@ public:
 	static GPOS_RESULT EresUnittest_AtomicBudget();
 	static GPOS_RESULT EresUnittest_TopDown();
 	static GPOS_RESULT EresUnittest_CostBudgetContexts();
+	static GPOS_RESULT EresUnittest_CostInputBounds();
 	static GPOS_RESULT EresUnittest_GraphSimplifierInfrastructure();
 	static GPOS_RESULT EresUnittest_GraphSimplifier();
 	static GPOS_RESULT EresUnittest_GraphSimplifierStress();

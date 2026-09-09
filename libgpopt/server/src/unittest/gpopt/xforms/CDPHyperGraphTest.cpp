@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <set>
 #include <utility>
 #include <vector>
@@ -18,6 +19,10 @@
 #include "gpos/test/CUnittest.h"
 
 #include "gpopt/base/CUtils.h"
+#include "gpdbcost/CCostModelPG.h"
+#include "gpopt/operators/CExpressionHandle.h"
+#include "gpopt/operators/CPhysicalInnerHashJoin.h"
+#include "gpopt/operators/CPhysicalLeftAntiSemiHashJoinBuildOuter.h"
 #include "gpopt/base/CCTEReq.h"
 #include "gpopt/base/CDistributionSpecSingleton.h"
 #include "gpopt/base/CEnfdDistribution.h"
@@ -500,6 +505,7 @@ CDPHyperGraphTest::EresUnittest()
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_AtomicBudget),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_TopDown),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_CostBudgetContexts),
+		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_CostInputBounds),
 		GPOS_UNITTEST_FUNC(
 			CDPHyperGraphTest::EresUnittest_GraphSimplifierInfrastructure),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_GraphSimplifier),
@@ -518,6 +524,89 @@ CDPHyperGraphTest::EresUnittest()
 			CDPHyperGraphTest::EresUnittest_CartesianDifferential),
 	};
 	return CUnittest::EresExecute(rgut, GPOS_ARRAY_SIZE(rgut));
+}
+
+GPOS_RESULT
+CDPHyperGraphTest::EresUnittest_CostInputBounds()
+{
+	CAutoMemoryPool amp;
+	CMemoryPool *mp = amp.Pmp();
+	CDSLTestFixture fixture(mp);
+	CAutoRef<gpdbcost::CCostModelPG> model(GPOS_NEW(mp) gpdbcost::CCostModelPG(mp, 1));
+	for (BOOL build_outer : {false, true})
+	{
+		for (ULONG key_count : {1u, 3u})
+		{
+			CColRefArray *left_cols, *right_cols;
+			auto *left = fixture.PexprLogicalGet("left", key_count, &left_cols);
+			auto *right = fixture.PexprLogicalGet("right", key_count, &right_cols);
+			auto *left_keys = GPOS_NEW(mp) CExpressionArray(mp);
+			auto *right_keys = GPOS_NEW(mp) CExpressionArray(mp);
+			auto *predicates = GPOS_NEW(mp) CExpressionArray(mp);
+			for (ULONG key = 0; key < key_count; ++key)
+			{
+				left_keys->Append(GPOS_NEW(mp) CExpression(mp,
+					GPOS_NEW(mp) CScalarIdent(mp, (*left_cols)[key])));
+				right_keys->Append(GPOS_NEW(mp) CExpression(mp,
+					GPOS_NEW(mp) CScalarIdent(mp, (*right_cols)[key])));
+				predicates->Append(fixture.PexprEqPred((*left_cols)[key], (*right_cols)[key]));
+			}
+			COperator *join = build_outer
+				? static_cast<COperator *>(GPOS_NEW(mp) CPhysicalLeftAntiSemiHashJoinBuildOuter(
+					mp, left_keys, right_keys, nullptr))
+				: GPOS_NEW(mp) CPhysicalInnerHashJoin(mp, left_keys, right_keys, nullptr);
+			CAutoRef<CExpression> expr(GPOS_NEW(mp) CExpression(mp, join, left, right,
+				CPredicateUtils::PexprConjunction(mp, predicates)));
+			CExpressionHandle handle(mp);
+			handle.Attach(expr.Value());
+			auto *stats = GPOS_NEW(mp) CStatistics(mp, GPOS_NEW(mp) UlongToHistogramMap(mp),
+				GPOS_NEW(mp) UlongToDoubleMap(mp), CDouble(1.0), false);
+			ICostModel::SCostingInfo info(mp, 2, GPOS_NEW(mp) ICostModel::CCostingStats(stats));
+			info.SetWidth(8.0);
+			for (ULONG child = 0; child < 2; ++child)
+			{
+				info.SetChildWidth(child, 8.0);
+				info.SetChildCost(child, 0.0);
+				info.SetChildRebinds(child, 1.0);
+			}
+			for (DOUBLE rows : {0.0, 1e-260, 0.5, 1.0, 1000.0, 1e6})
+			{
+				info.SetChildRows(0, rows);
+				info.SetChildRows(1, rows * 2.0);
+				const DOUBLE floor = model->CostLocalInputLowerBound(handle, 0, rows) +
+					model->CostLocalInputLowerBound(handle, 1, rows * 2.0);
+				GPOS_ASSERT(rows == 0.0 ? floor == 0.0 : floor > 0.0);
+				for (DOUBLE output : {0.0, 1.0, 1e6})
+				{
+					info.SetRows(output);
+					for (DOUBLE rebinds : {1.0, 2.0, 100.0})
+					{
+						info.SetRebinds(rebinds);
+						GPOS_ASSERT(model->Cost(handle, &info).Get() >= floor);
+					}
+				}
+			}
+			const ULONG build = build_outer ? 0 : 1;
+			// Test saturation without overflowing the existing selectivity math.
+			GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 0, 1e260) +
+				model->CostLocalInputLowerBound(handle, 1, 1e260) < GPOS_FP_ABS_MAX);
+			GPOS_ASSERT(model->CostLocalInputLowerBound(handle, build, 100.0) >
+				model->CostLocalInputLowerBound(handle, 1 - build, 100.0));
+			for (DOUBLE invalid : {-1.0, std::numeric_limits<DOUBLE>::infinity(),
+				std::numeric_limits<DOUBLE>::quiet_NaN()})
+			{
+				GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 0, invalid) == 0.0);
+			}
+			GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 2, 100.0) == 0.0);
+		}
+	}
+	CAutoRef<CExpression> sort(GPOS_NEW(mp) CExpression(mp,
+		GPOS_NEW(mp) CPhysicalSort(mp, GPOS_NEW(mp) COrderSpec(mp))));
+	CExpressionHandle handle(mp);
+	handle.Attach(sort.Value());
+	GPOS_ASSERT(!model->FChildrenCostFloor(handle));
+	GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 0, 100.0) == 0.0);
+	return GPOS_OK;
 }
 
 GPOS_RESULT

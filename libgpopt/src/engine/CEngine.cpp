@@ -2184,7 +2184,9 @@ CEngine::Optimize()
 					<< " reused_failure=" << m_cost_budget_reused_failure
 					<< " reused_lower_bound=" << m_cost_budget_reused_lower_bound
 					<< " skipped_jobs=" << m_cost_budget_skipped_jobs
-					<< " precheck_skipped_jobs=" << m_cost_budget_precheck_jobs;
+					<< " precheck_skipped_jobs=" << m_cost_budget_precheck_jobs
+					<< " local_bounds=" << m_cost_budget_local_bounds
+					<< " local_rejections=" << m_cost_budget_local_rejections;
 			}
 		}
 

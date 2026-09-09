@@ -492,26 +492,51 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 		{
 			m_child_requests.resize(m_ulArity, nullptr);
 		}
-		if (COptCtxt::PoctxtFromTLS()->GetCostModel()->FChildrenCostFloor(*m_pexprhdlPlan))
+		ICostModel *cost_model = COptCtxt::PoctxtFromTLS()->GetCostModel();
+		if (cost_model->FChildrenCostFloor(*m_pexprhdlPlan))
 		{
 			// Appendix A: tighten to a feasible incumbent, then subtract
-			// already completed siblings. The certified local lower bound is
-			// zero here; do not substitute a cardinality-based cost proxy.
+			// completed siblings and certified local work on their actual rows.
 			cost_limit = m_poc->CostLimit();
 			if (m_poc->PccBest() != nullptr)
 			{
 				const DOUBLE best = m_poc->PccBest()->Cost().Get();
 				cost_limit = cost_limit < 0.0 ? best : std::min(cost_limit, best);
 			}
+			// At CCost's saturation ceiling, every representable cost fits.
+			// Subtraction would incorrectly turn that into a finite restriction.
+			if (cost_limit >= GPOS_FP_ABS_MAX)
+			{
+				cost_limit = -1.0;
+			}
 			if (cost_limit >= 0.0)
 			{
-				for (auto *sibling : m_child_requests)
+				for (ULONG child = 0; child < m_child_requests.size(); ++child)
 				{
+					auto *sibling = m_child_requests[child];
 					if (sibling != nullptr && sibling->PccBest() != nullptr)
 					{
+						GPOS_ASSERT(sibling->Est() == COptimizationContext::estOptimized);
+						auto *best = sibling->PccBest();
 						cost_limit = std::nextafter(
-							cost_limit - sibling->PccBest()->Cost().Get(),
+							cost_limit - best->Cost().Get(),
 							std::numeric_limits<DOUBLE>::infinity());
+						// Parameterized expressions can have fractional rebinds.
+						// Otherwise CostCompute guarantees at least one execution.
+						if (cost_limit >= 0.0 && !m_pexprhdlPlan->HasOuterRefs())
+						{
+							const DOUBLE rows = best->Pdpplan()->Pds()->Edpt() ==
+								CDistributionSpec::EdptPartitioned
+								? best->DRowsPerHost().Get() : best->Pstats()->Rows().Get();
+							const DOUBLE local = cost_model->CostLocalInputLowerBound(
+								*m_pexprhdlPlan, child, rows);
+							if (local > 0.0)
+							{
+								cost_limit = std::nextafter(cost_limit - local,
+									std::numeric_limits<DOUBLE>::infinity());
+								psc->Peng()->RecordCostBudgetLocalBound(cost_limit < 0.0);
+							}
+						}
 					}
 				}
 				if (cost_limit < 0.0)

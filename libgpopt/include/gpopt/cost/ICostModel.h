@@ -368,6 +368,14 @@ public:
 	// a remaining budget; e.g. LIMIT can discount its child's work.
 	virtual BOOL FChildrenCostFloor(CExpressionHandle &) const { return false; }
 
+	// Mandatory local work attributable to one input, per execution. These
+	// non-overlapping contributions may be added, but only using the selected
+	// child's actual costing rows and when the parent executes at least once.
+	// Unknown operators/models cannot certify any positive contribution.
+	// DOUBLE deliberately preserves exact zero (CCost clamps it to 1e-250).
+	virtual DOUBLE CostLocalInputLowerBound(CExpressionHandle &, ULONG,
+									  DOUBLE) const { return 0.0; }
+
 	// cost model type
 	virtual ECostModelType Ecmt() const = 0;
 

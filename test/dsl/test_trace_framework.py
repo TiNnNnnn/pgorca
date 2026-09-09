@@ -101,7 +101,8 @@ class TraceFrameworkTest(unittest.TestCase):
                 'Optimizer': 'pg_orca', 'Planning Time': 1, 'Execution Time': 1,
             }]), ('DPHyperVerify: status=equal\nCostBudgetSummary: feasible=2 bounded_failure=3 '
                   'pruned=4 reused_feasible=5 reused_failure=6 '
-                  'reused_lower_bound=7 skipped_jobs=18 precheck_skipped_jobs=19'), 0, 1)
+                  'reused_lower_bound=7 skipped_jobs=18 precheck_skipped_jobs=19 '
+                  'local_bounds=20 local_rejections=21'), 0, 1)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -122,6 +123,8 @@ class TraceFrameworkTest(unittest.TestCase):
             self.assertEqual(result['audit']['top_down']['cost_budget_early'],
                              {'lower_bound': 7, 'skipped_jobs': 18})
             self.assertEqual(result['audit']['top_down']['cost_budget_precheck_jobs'], 19)
+            self.assertEqual(result['audit']['top_down']['cost_budget_local'],
+                             {'bounds': 20, 'rejections': 21})
 
     def test_join_comparison_requires_completed_audit(self) -> None:
         plan = json.dumps([{'Plan': {'Node Type': 'Result'}, 'Optimizer': 'pg_orca'}])

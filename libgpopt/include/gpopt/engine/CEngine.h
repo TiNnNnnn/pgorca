@@ -73,6 +73,8 @@ private:
 	ULONG m_cost_budget_reused_lower_bound{0};
 	ULONG m_cost_budget_skipped_jobs{0};
 	ULONG m_cost_budget_precheck_jobs{0};
+	ULONG m_cost_budget_local_bounds{0};
+	ULONG m_cost_budget_local_rejections{0};
 
 	// memo table
 	CMemo *m_pmemo;
@@ -242,6 +244,11 @@ public:
 	void RecordCostBudgetReuse(COptimizationContext *request,
 		COptimizationContext *completed, BOOL rejected);
 	void RecordCostBudgetPrecheck(ULONG jobs) { m_cost_budget_precheck_jobs += jobs; }
+	void RecordCostBudgetLocalBound(BOOL rejected)
+	{
+		++m_cost_budget_local_bounds;
+		m_cost_budget_local_rejections += rejected;
+	}
 	CEngine(const CEngine &) = delete;
 
 	// ctor
