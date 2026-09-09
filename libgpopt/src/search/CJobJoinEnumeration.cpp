@@ -36,6 +36,7 @@
 #include "gpopt/xforms/CDPHyperJoinRegion.h"
 #include "gpopt/xforms/CDPHyperGraphSimplifier.h"
 #include "gpopt/xforms/CDPHyperPlan.h"
+#include "gpopt/xforms/CTDHyperEnumerator.h"
 #include "gpopt/xforms/CJoinOrderGreedy.h"
 #include "gpopt/xforms/CJoinRegionSpec.h"
 #include "naucrates/traceflags/traceflags.h"
@@ -955,11 +956,54 @@ CJobJoinEnumeration::FEnumerateRegion(
 			CDPHyperJoinRegion::SJoinRequest request;
 			return region->FBuildJoinRequest(left, right, &request);
 		};
-	CDPHyperPlan exhaustive_plan(mp, hint->UlDPHyperPairBudget(), pair_filter);
+	CDPHyperPlan bottom_up_plan(mp, hint->UlDPHyperPairBudget(), pair_filter);
+	CDPHyperPlan top_down_plan(mp, hint->UlDPHyperPairBudget(), pair_filter);
+	BOOL top_down = GPOS_FTRACE(EopttraceDPHyperTopDown);
+	const BOOL verify = GPOS_FTRACE(EopttraceDPHyperVerify);
 	CWallClock enumeration_detail_clock(true);
-	CDPHyperEnumerator enumerator(mp, region->Graph(), &exhaustive_plan);
-	const BOOL enumeration_aborted = enumerator.Enumerate();
-	const ULONG exhaustive_us = enumeration_detail_clock.ElapsedUS();
+	BOOL bottom_up_aborted = false;
+	BOOL top_down_aborted = false;
+	ULONG bottom_up_us = 0;
+	ULONG top_down_us = 0;
+	CTDHyperEnumerator::SStats td_stats;
+	if (!top_down || verify)
+	{
+		CDPHyperEnumerator enumerator(mp, region->Graph(), &bottom_up_plan);
+		bottom_up_aborted = enumerator.Enumerate();
+		bottom_up_us = enumeration_detail_clock.ElapsedUS();
+	}
+	if (top_down || verify)
+	{
+		enumeration_detail_clock.Restart();
+		CTDHyperEnumerator enumerator(mp, region->Graph(), &top_down_plan);
+		top_down_aborted = enumerator.Enumerate();
+		top_down_us = enumeration_detail_clock.ElapsedUS();
+		td_stats = enumerator.Stats();
+	}
+	if (verify)
+	{
+		const BOOL comparable = !bottom_up_aborted && !top_down_aborted;
+		const BOOL equal = comparable && bottom_up_plan.Matches(top_down_plan);
+		if (comparable && !equal)
+		{
+			top_down = false;
+		}
+		GPOS_TRACE_FORMAT(
+			"DPHyperVerify: status=%s group=%d nodes=%d "
+			"bottom_up_pairs=%d top_down_pairs=%d bottom_up_us=%d "
+			"top_down_us=%d selected=%s",
+			!comparable ? "inconclusive_budget" : (equal ? "equal" : "mismatch"),
+			m_pgexpr->Pgroup()->Id(), node_count, bottom_up_plan.PairCount(),
+			top_down_plan.PairCount(), bottom_up_us, top_down_us,
+			top_down ? "top_down" : "bottom_up");
+	}
+	const CDPHyperPlan &exhaustive_plan =
+		top_down ? top_down_plan : bottom_up_plan;
+	const BOOL enumeration_aborted =
+		top_down ? top_down_aborted : bottom_up_aborted;
+	enumeration_detail_clock.Restart();
+	// Exclude the audit pass from this algorithm's reported enumeration time.
+	const ULONG exhaustive_us = top_down ? top_down_us : bottom_up_us;
 	const BOOL exhaustive_complete = exhaustive_plan.Complete(node_count);
 	const BOOL budget_exhausted = exhaustive_plan.BudgetExhausted();
 	const ULONG attempted_pairs = exhaustive_plan.PairCount();
@@ -1201,7 +1245,9 @@ CJobJoinEnumeration::FEnumerateRegion(
 			"cost_cache_stats_derivations=%d cost_cache_stats_us=%d "
 			"cost_cache_predicate_us=%d cost_cache_join_us=%d "
 			"cost_cache_exact_stats_hits=%d "
-			"cost_cache_exact_stats_misses=%d mode=%s",
+			"cost_cache_exact_stats_misses=%d mode=%s algorithm=%s "
+			"td_subproblems=%d td_cache_hits=%d td_candidates=%d "
+			"td_rejected=%d td_compound_merges=%d",
 			m_pgexpr->Pgroup()->Id(), m_pgexpr->Pop()->SzId(), node_count,
 			region->GeneratedEdgeCount(), region->CartesianEdgeCount(),
 			dependency_count, plan->PairCount(), plan->SeenCount(), fingerprint_hash,
@@ -1218,7 +1264,10 @@ CJobJoinEnumeration::FEnumerateRegion(
 			cost_cache_entries, cost_cache_stats_derivations,
 			cost_cache_stats_us, cost_cache_predicate_us, cost_cache_join_us,
 			cost_cache_exact_stats_hits, cost_cache_exact_stats_misses,
-			GPOS_FTRACE(EopttraceDPHyperShadow) ? "shadow" : "replacement");
+			GPOS_FTRACE(EopttraceDPHyperShadow) ? "shadow" : "replacement",
+			top_down ? "top_down" : "bottom_up",
+			td_stats.m_subproblems, td_stats.m_cache_hits, td_stats.m_candidates,
+			td_stats.m_rejected, td_stats.m_compound_merges);
 	}
 	PublishRegionStatus(region_members, CGroupExpression::EdphSucceeded);
 	return true;

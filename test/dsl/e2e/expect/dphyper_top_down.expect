@@ -1,0 +1,65 @@
+{
+  "description": "Top-down partitioning retains exact DPHyp cuts and executes through the existing Cascades join-region job",
+  "plans": [
+    {
+      "name": "verified-top-down",
+      "dsl": false,
+      "dphyper": true,
+      "dphyper_shadow": false,
+      "trace": true,
+      "dphyper_top_down": true,
+      "dphyper_verify": true,
+      "contains": [
+        "DPHyperVerify: status=equal",
+        "bottom_up_pairs=25 top_down_pairs=25",
+        "selected=top_down",
+        "pairs=25 subsets=15",
+        "enumeration=complete",
+        "algorithm=top_down"
+      ],
+      "not_contains": [
+        "DPHyperVerify: status=mismatch",
+        "inconclusive_budget"
+      ],
+      "joins": 3
+    },
+    {
+      "name": "bounded-top-down",
+      "dsl": false,
+      "dphyper": true,
+      "dphyper_pair_budget": 1,
+      "dphyper_shadow": false,
+      "trace": true,
+      "dphyper_top_down": true,
+      "dphyper_verify": true,
+      "contains": [
+        "DPHyperVerify: status=inconclusive_budget",
+        "enumeration=simplified",
+        "strategy=binary_skeleton",
+        "algorithm=top_down"
+      ],
+      "not_contains": [
+        "DPHyperVerify: status=equal",
+        "DPHyperVerify: status=mismatch"
+      ],
+      "joins": 3
+    }
+  ],
+  "rows": {
+    "dphyper": true,
+    "dphyper_shadow": false,
+    "dphyper_top_down": true,
+    "output": [
+      "1,1,1,1",
+      "1,1,1,1",
+      "2,2,2,2",
+      "2,2,2,2"
+    ],
+    "postgres_output": [
+      "1,1,1,1",
+      "1,1,1,1",
+      "2,2,2,2",
+      "2,2,2,2"
+    ]
+  }
+}

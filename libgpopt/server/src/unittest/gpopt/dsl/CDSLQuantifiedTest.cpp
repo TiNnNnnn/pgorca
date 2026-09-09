@@ -511,6 +511,21 @@ CDSLQuantifiedTest::EresUnittest_ExpressionDefinedProjectQuantified()
 		GPOS_ASSERT(COperator::EopScalarCmp == (*pexprApply)[2]->Pop()->Eopid());
 		GPOS_ASSERT(!(*pexprTarget)[1]->DeriveHasSubquery());
 
+		// A quantified result carrier is not a relational LeftApply, even
+		// when its right input has no outer references. Otherwise the ordinary
+		// Apply->Join rule turns ALL into a join with duplicate/incorrect rows.
+		CDSLRule *plain_apply = PruleParse(mp,
+			"LeftApply<p0 a0 a1 a2>(Input<t0>,Input<t1>)|"
+			"LeftJoin<p1 a3 a4>(Input<t2>,Input<t3>)|"
+			"TableEq(t2,t0);TableEq(t3,t1);PredicateEq(p1,p0);"
+			"AttrsEq(a3,a0);AttrsEq(a4,a1);AttrsEmpty(a2)");
+		GPOS_UNITTEST_ASSERT(nullptr != plain_apply);
+		CDSLModel *plain_model = GPOS_NEW(mp) CDSLModel(mp);
+		GPOS_UNITTEST_ASSERT(!matcher.FMatch(
+			plain_apply->PfragSrc()->PopRoot(), pexprApply, plain_model));
+		plain_model->Release();
+		plain_apply->Release();
+
 		pexprTarget->Release();
 		pmodel->Release();
 		prule->Release();

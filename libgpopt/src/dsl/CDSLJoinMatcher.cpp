@@ -607,6 +607,21 @@ CDSLJoinMatcher::FMatch(const CDSLOp *popJoin, CExpression *pexprJoin,
 	{
 		return false;
 	}
+	if (fExpectedInnerApply || fExpectedLeftOuterApply)
+	{
+		const COperator::EOperatorId origin =
+			CLogicalApply::PopConvert(pexprJoin->Pop())->EopidOriginSubq();
+		if (COperator::EopScalarSubqueryAny == origin ||
+			COperator::EopScalarSubqueryAll == origin)
+		{
+			// These carriers produce one quantified Boolean, including the
+			// empty-set/NULL cases. They are not relational Apply: matching
+			// them as such would authorize e.g. Apply->Join and lose the
+			// quantifier. Keep them opaque to relational Apply templates;
+			// ANY/ALL matching and expression-defined lowering own this domain.
+			return false;
+		}
+	}
 	if (fSemiApply &&
 		COperator::EopLogicalLeftSemiApplyIn == eopid &&
 		CUtils::FScalarConstTrue((*pexprJoin)[2]))

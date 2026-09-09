@@ -26,6 +26,8 @@ extern bool pg_orca_enable_dsl_rule;
 extern bool pg_orca_enable_assert_maxonerow;
 extern bool pg_orca_enable_dphyper;
 extern bool pg_orca_dphyper_shadow;
+extern bool pg_orca_dphyper_top_down;
+extern bool pg_orca_dphyper_verify;
 // pg_orca.dsl_only_xforms / pg_orca.trace_dsl_rule (pg_orca.cpp): scoped
 // native-xform suppression and per-rule attribution for replacement tests.
 extern char *pg_orca_dsl_only_xforms;
@@ -339,6 +341,10 @@ CConfigParamMapping::SConfigMappingElem CConfigParamMapping::m_elements[] = {
 	{EopttraceDPHyperShadow, &pg_orca_dphyper_shadow,
 	 false, GPOS_WSZ_LIT(
 		 "Keep native join enumerators alongside DPHyper for differential tests.")},
+	{EopttraceDPHyperTopDown, &pg_orca_dphyper_top_down,
+	 false, GPOS_WSZ_LIT("Use top-down hypergraph partitioning.")},
+	{EopttraceDPHyperVerify, &pg_orca_dphyper_verify,
+	 false, GPOS_WSZ_LIT("Verify top-down cuts against DPHyp.")},
 };
 
 //---------------------------------------------------------------------------

@@ -22,6 +22,8 @@ from build_xform_replacement_inventory import (
     merge_inventory,
 )
 from compare_rule_traces import compare, read_records
+from compare_join_enumerators import row_bag, settings as join_settings
+from compare_join_enumerators import compare as compare_joins
 from import_wetune_workloads import postgres_schema, schema_catalog
 from merge_rule_graph import merge_graph, read_trace_inputs, render_dot
 from replacement_rule_classification import audit_rule_file, audit_rule_text
@@ -69,6 +71,38 @@ from run_workload_comparison import (
 
 
 class TraceFrameworkTest(unittest.TestCase):
+    def test_join_comparison_keeps_bags_and_audit_out_of_timing(self) -> None:
+        self.assertEqual(row_bag('a\\nb\t1\nx\t2\n'), row_bag('x\t2\na\\nb\t1\n'))
+        self.assertNotEqual(row_bag('x\t2\nx\t2\n'), row_bag('x\t2\n'))
+        self.assertNotEqual(row_bag('\\N\n'), row_bag('\n'))
+        self.assertNotEqual(row_bag('\\N\n'), row_bag('\\\\N\n'))
+        baseline = join_settings(False, 10000, dsl=True)
+        candidate = join_settings(True, 10000, dsl=True)
+        self.assertEqual(baseline.replace('dphyper_top_down=off', 'dphyper_top_down=on'), candidate)
+        self.assertIn('dphyper_verify=off', candidate)
+        self.assertIn('trace_dsl_rule=off', candidate)
+        self.assertIn('dphyper_verify=on', join_settings(True, 10000, verify=True))
+
+    def test_join_comparison_rejects_two_identical_wrong_results(self) -> None:
+        def fake_psql(binary, socket, port, database, sql, timeout):
+            if 'COPY (' in sql:
+                return ('2,2\n' if 'enable_orca=off' in sql else '1,1\n', '', 0, 1)
+            return (json.dumps([{
+                'Plan': {'Node Type': 'Result', 'Total Cost': 1},
+                'Optimizer': 'pg_orca', 'Planning Time': 1, 'Execution Time': 1,
+            }]), 'DPHyperVerify: status=equal', 0, 1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            query = root / 'query.sql'
+            query.write_text('SELECT 1')
+            args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True)
+            with patch('compare_join_enumerators.psql', side_effect=fake_psql):
+                result = compare_joins(args, Path('psql'), root, 'test', query, root / 'output')
+            self.assertTrue(result['rows_equal'])
+            self.assertFalse(result['postgres_equal'])
+            self.assertTrue(result['failures'])
+
     def test_runtime_rule_edges_merge_as_multigraph_evidence(self) -> None:
         base = {
             "schema_version": 1,
