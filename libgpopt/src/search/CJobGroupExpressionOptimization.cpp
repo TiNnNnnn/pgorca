@@ -16,6 +16,7 @@
 #include <limits>
 
 #include "gpopt/base/CCostContext.h"
+#include "gpopt/base/CPartInfo.h"
 #include "gpopt/base/CDrvdPropCtxtPlan.h"
 #include "gpopt/base/COptCtxt.h"
 #include "gpopt/base/CReqdPropPlan.h"
@@ -552,7 +553,14 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 	// use current stats for optimizing current child
 	IStatisticsArray *stats_ctxt = GPOS_NEW(psc->GetGlobalMemoryPool())
 		IStatisticsArray(psc->GetGlobalMemoryPool());
-	CUtils::AddRefAppend(stats_ctxt, m_pdrgpstatCurrentCtxt);
+	// External statistics affect outer references and dynamic partition
+	// elimination. Otherwise they only split identical budget problems by
+	// unrelated sibling-statistics identities. Keep the legacy path intact.
+	if (!budget_search || m_pexprhdlPlan->HasOuterRefs(m_ulChildIndex) ||
+		m_pexprhdlPlan->DerivePartitionInfo(m_ulChildIndex)->UlConsumers() > 0)
+	{
+		CUtils::AddRefAppend(stats_ctxt, m_pdrgpstatCurrentCtxt);
+	}
 
 	// compute required relational properties
 	CReqdPropRelational *prprel = nullptr;

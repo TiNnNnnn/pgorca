@@ -81,4 +81,12 @@ INSERT INTO dsl_notin_inner VALUES
     (3,2),(3,NULL),
     (4,2),(4,3);
 
+CREATE TABLE dsl_budget_partitioned(k int) PARTITION BY RANGE (k);
+CREATE TABLE dsl_budget_partitioned_low PARTITION OF dsl_budget_partitioned
+    FOR VALUES FROM (MINVALUE) TO (2);
+CREATE TABLE dsl_budget_partitioned_high PARTITION OF dsl_budget_partitioned
+    FOR VALUES FROM (2) TO (MAXVALUE);
+CREATE TABLE dsl_budget_partitioned_default PARTITION OF dsl_budget_partitioned DEFAULT;
+INSERT INTO dsl_budget_partitioned VALUES (1),(1),(2),(3),(NULL);
+
 ANALYZE;

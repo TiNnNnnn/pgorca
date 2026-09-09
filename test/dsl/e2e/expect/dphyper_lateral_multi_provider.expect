@@ -7,6 +7,7 @@
       "dphyper": true,
       "dphyper_shadow": false,
       "trace": true,
+      "enable_cost_budget": false,
       "contains": [
         "DPHyper: status=applied",
         "root=CLogicalInnerJoin nodes=3",
@@ -21,11 +22,34 @@
         "Xform: CXformJoinAssociativity"
       ],
       "joins": 2
+    },
+    {
+      "name": "bounded",
+      "dsl": false,
+      "dphyper": true,
+      "dphyper_shadow": false,
+      "trace": true,
+      "dphyper_top_down": true,
+      "dphyper_verify": true,
+      "enable_cost_budget": true,
+      "contains": [
+        "Optimizer: pg_orca",
+        "DPHyperVerify: status=equal",
+        "dependencies=2",
+        "pairs=2 subsets=5"
+      ],
+      "not_contains": [
+        "DPHyperVerify: status=mismatch",
+        "Failed assertion"
+      ],
+      "joins": 2
     }
   ],
   "rows": {
     "dphyper": true,
     "dphyper_shadow": false,
+    "dphyper_top_down": true,
+    "enable_cost_budget": true,
     "output": [
       "1,1,1",
       "1,1,1",
