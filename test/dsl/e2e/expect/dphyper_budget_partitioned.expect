@@ -1,26 +1,26 @@
 {
-  "description": "DPHyper owns NULL-aware anti join swaps inside a mixed join region",
+  "description": "Budget statistics scoping preserves a partitioned child and duplicate/NULL bag semantics",
   "plans": [
     {
-      "name": "replacement",
-      "dsl": false,
+      "name": "unbounded",
+      "dsl": true,
       "dphyper": true,
       "dphyper_shadow": false,
-      "trace": true,
+      "dphyper_top_down": true,
+      "dphyper_verify": true,
+      "enable_cost_budget": false,
       "contains": [
-        "DPHyper: status=applied",
-        "root=CLogicalInnerJoin nodes=3",
-        "mode=replacement",
-        "\"operator\":\"CLogicalLeftAntiSemiJoinNotIn\",\"source\":\"dphyper\",\"origin\":\"CXformDPHyperJoinRegion\""
+        "Optimizer: pg_orca",
+        "DPHyperVerify: status=equal"
       ],
       "not_contains": [
-        "Xform: CXformExpandNAryJoinDPv2",
-        "Xform: CXformAntiSemiJoinNotInInnerJoinSwap"
+        "DPHyperVerify: status=mismatch",
+        "Failed assertion"
       ],
       "joins": 1
     },
     {
-      "name": "bounded-top-down",
+      "name": "bounded",
       "dsl": true,
       "dphyper": true,
       "dphyper_shadow": false,
@@ -34,7 +34,8 @@
       "not_contains": [
         "DPHyperVerify: status=mismatch",
         "Failed assertion"
-      ]
+      ],
+      "joins": 1
     }
   ],
   "rows": {
@@ -43,10 +44,20 @@
     "dphyper_top_down": true,
     "enable_cost_budget": true,
     "output": [
-      "2,2"
+      "1",
+      "1",
+      "1",
+      "1",
+      "2",
+      "3"
     ],
     "postgres_output": [
-      "2,2"
+      "1",
+      "1",
+      "1",
+      "1",
+      "2",
+      "3"
     ]
   }
 }

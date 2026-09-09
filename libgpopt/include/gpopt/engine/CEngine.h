@@ -65,6 +65,16 @@ private:
 	// index of current search stage
 	ULONG m_ulCurrSearchStage;
 	ULONG m_ulDSLExperimentOptimizationMs;
+	ULONG m_cost_budget_feasible{0};
+	ULONG m_cost_budget_failed{0};
+	ULONG m_cost_budget_pruned{0};
+	ULONG m_cost_budget_reused_feasible{0};
+	ULONG m_cost_budget_reused_failure{0};
+	ULONG m_cost_budget_reused_lower_bound{0};
+	ULONG m_cost_budget_skipped_jobs{0};
+	ULONG m_cost_budget_precheck_jobs{0};
+	ULONG m_cost_budget_local_bounds{0};
+	ULONG m_cost_budget_local_rejections{0};
 
 	// memo table
 	CMemo *m_pmemo;
@@ -229,6 +239,16 @@ private:
 									   const CHAR *szHeader) const;
 
 public:
+	BOOL FCostBudgetSearchEnabled() const;
+	void RecordCostBudget(COptimizationContext *request, BOOL pruned);
+	void RecordCostBudgetReuse(COptimizationContext *request,
+		COptimizationContext *completed, BOOL rejected);
+	void RecordCostBudgetPrecheck(ULONG jobs) { m_cost_budget_precheck_jobs += jobs; }
+	void RecordCostBudgetLocalBound(BOOL rejected)
+	{
+		++m_cost_budget_local_bounds;
+		m_cost_budget_local_rejections += rejected;
+	}
 	CEngine(const CEngine &) = delete;
 
 	// ctor
@@ -415,7 +435,9 @@ public:
 	// determine if a plan, rooted by given group expression, can be safely pruned based on cost bounds
 	BOOL FSafeToPrune(CGroupExpression *pgexpr, CReqdPropPlan *prpp,
 					  CCostContext *pccChild, ULONG child_index,
-					  CCost *pcostLowerBound);
+					  CCost *pcostLowerBound,
+					  COptimizationContext *request = nullptr,
+					  BOOL cached_only = false);
 
 	// print
 	IOstream &OsPrint(IOstream &) const;

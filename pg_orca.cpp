@@ -181,6 +181,10 @@ bool  pg_orca_enable_assert_maxonerow = false;
 // DefineCustom*Variable below when the extension is loaded.
 bool  pg_orca_enable_dphyper = false;
 bool  pg_orca_dphyper_shadow = false;
+bool  pg_orca_dphyper_top_down = false;
+bool  pg_orca_enable_space_pruning = true;
+bool  pg_orca_enable_cost_budget = false;
+bool  pg_orca_dphyper_verify = false;
 int   pg_orca_dphyper_edge_budget = 100000;
 int   pg_orca_dphyper_pair_budget = 100;
 
@@ -885,6 +889,47 @@ void _PG_init(void)
         "fallbacks materialize a binary greedy plan.",
         NULL,
         &pg_orca_dphyper_shadow,
+        false,
+        PGC_USERSET,
+        0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "pg_orca.dphyper_top_down",
+        "Use experimental top-down hypergraph partitioning inside the "
+        "DPHyper Cascades job. Does not enable cost-based pruning.",
+        NULL,
+        &pg_orca_dphyper_top_down,
+        false,
+        PGC_USERSET,
+        0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "pg_orca.enable_space_pruning",
+        "Enable existing ORCA physical cost lower-bound pruning. Disable "
+        "for cost-pruning comparisons; logical exploration is unchanged.",
+        NULL,
+        &pg_orca_enable_space_pruning,
+        true,
+        PGC_USERSET,
+        0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "pg_orca.dphyper_verify",
+        "Compare bottom-up and top-down cuts and edge provenance before "
+        "Memo insertion; use bottom-up on a mismatch. Budget-limited "
+        "comparisons are reported as inconclusive.",
+        NULL,
+        &pg_orca_dphyper_verify,
+        false,
+        PGC_USERSET,
+        0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "pg_orca.enable_cost_budget",
+        "Propagate physical cost ceilings through certified additive operators. "
+        "Experimental; requires space pruning and a single search stage.",
+        NULL,
+        &pg_orca_enable_cost_budget,
         false,
         PGC_USERSET,
         0, NULL, NULL, NULL);

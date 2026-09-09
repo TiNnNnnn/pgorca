@@ -256,6 +256,9 @@ enum EOptTraceFlag
 	// Keep native join enumerators alongside DPHyper for differential testing.
 	// When clear, a successful DPHyper region becomes the sole join-order owner.
 	EopttraceDPHyperShadow = 103053,
+	EopttraceDPHyperTopDown = 103054,
+	EopttraceDPHyperVerify = 103055,
+	EopttraceEnableCostBudget = 103056,
 
 	///////////////////////////////////////////////////////
 	///////////////////// statistics flags ////////////////

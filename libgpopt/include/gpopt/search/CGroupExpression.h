@@ -243,7 +243,8 @@ public:
 
 	// compute a cost lower bound for plans, rooted by current group expression, and satisfying the given required properties
 	CCost CostLowerBound(CMemoryPool *mp, CReqdPropPlan *prppInput,
-						 CCostContext *pccChild, ULONG child_index);
+					 CCostContext *pccChild, ULONG child_index,
+					 BOOL cached_only = false);
 
 	// initialize group expression
 	void Init(CGroup *pgroup, ULONG id);

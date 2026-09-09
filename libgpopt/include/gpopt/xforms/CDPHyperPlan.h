@@ -65,6 +65,9 @@ public:
 						   ULONG edge_id) override;
 
 	BOOL Complete(ULONG node_count) const;
+	// Exact unordered cuts and connecting-edge provenance, independent of
+	// traversal order. Only completed, non-budgeted results are comparable.
+	BOOL Matches(const CDPHyperPlan &other) const;
 
 	BOOL
 	BudgetExhausted() const

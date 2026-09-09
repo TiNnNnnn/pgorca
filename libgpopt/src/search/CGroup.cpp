@@ -260,6 +260,8 @@ CGroup::CGroup(CMemoryPool *mp, BOOL fScalar)
 //---------------------------------------------------------------------------
 CGroup::~CGroup()
 {
+	CRefCount::SafeRelease(m_budget_completions);
+	m_budget_completions = nullptr;
 	CRefCount::SafeRelease(m_pdrgpexprJoinKeysOuter);
 	CRefCount::SafeRelease(m_pdrgpexprJoinKeysInner);
 	CRefCount::SafeRelease(m_join_opfamilies);
@@ -309,6 +311,11 @@ CGroup::~CGroup()
 void
 CGroup::CleanupContexts()
 {
+	if (m_budget_completions != nullptr)
+	{
+		m_budget_completions->Release();
+		m_budget_completions = nullptr;
+	}
 	// need to suspend cancellation while cleaning up
 	{
 		CAutoSuspendAbort asa;
@@ -497,6 +504,81 @@ CGroup::PocInsert(COptimizationContext *poc)
 	return pocFound;
 }
 
+COptimizationContext *
+CGroup::PocReuseCompleted(COptimizationContext *request, BOOL *budget_rejected)
+{
+	// Appendix A: success is optimal; failure proves only an insufficient
+	// ceiling. Never answer a wider request using a narrower failed search.
+	if (budget_rejected != nullptr)
+	{
+		*budget_rejected = false;
+	}
+	if (m_budget_completions == nullptr)
+	{
+		return nullptr;
+	}
+	auto *entry = m_budget_completions->Find(request);
+	if (entry == nullptr)
+	{
+		return nullptr;
+	}
+	if (entry->best != nullptr && (!request->FBounded() ||
+		entry->best->PccBest()->Cost().Get() <= request->CostLimit()))
+	{
+		return entry->best;
+	}
+	if (request->FBounded() && entry->failure != nullptr &&
+		(!entry->failure->FBounded() ||
+		 request->CostLimit() <= entry->failure->CostLimit()))
+	{
+		return entry->failure;
+	}
+	if (budget_rejected != nullptr && entry->best != nullptr)
+	{
+		// The completed optimum is also an exact lower bound. A smaller
+		// ceiling cannot succeed, so there is no reason to descend again.
+		GPOS_ASSERT(request->FBounded());
+		GPOS_ASSERT(entry->best->PccBest()->Cost().Get() > request->CostLimit());
+		*budget_rejected = true;
+		return entry->best;
+	}
+	return nullptr;
+}
+
+void
+CGroup::RecordBudgetCompletion(COptimizationContext *context)
+{
+	GPOS_ASSERT(context->Pgroup() == this);
+	GPOS_ASSERT(context->Est() == COptimizationContext::estOptimized);
+	if (m_budget_completions == nullptr)
+	{
+		m_budget_completions = GPOS_NEW(m_mp) BudgetCompletionMap(m_mp);
+	}
+	auto *entry = m_budget_completions->Find(context);
+	if (entry == nullptr)
+	{
+		entry = GPOS_NEW(m_mp) SBudgetCompletion;
+		m_budget_completions->Insert(context, entry);
+	}
+	if (context->PccBest() != nullptr)
+	{
+		GPOS_ASSERT(!context->PccBest()->FPruned());
+		GPOS_ASSERT(!context->FBounded() ||
+			context->PccBest()->Cost().Get() <= context->CostLimit());
+		if (entry->best == nullptr ||
+			context->PccBest()->Cost() < entry->best->PccBest()->Cost())
+		{
+			entry->best = context;
+		}
+	}
+	else if (entry->failure == nullptr || !context->FBounded() ||
+		(entry->failure->FBounded() &&
+		 context->CostLimit() > entry->failure->CostLimit()))
+	{
+		entry->failure = context;
+	}
+}
+
 
 //---------------------------------------------------------------------------
 //	@function:
@@ -663,6 +745,11 @@ CGroup::HashValue() const
 void
 CGroup::Insert(CGroupExpression *pgexpr)
 {
+	if (m_budget_completions != nullptr)
+	{
+		m_budget_completions->Release();
+		m_budget_completions = nullptr;
+	}
 	m_listGExprs.Append(pgexpr);
 	COperator *pop = pgexpr->Pop();
 	if (pop->FLogical())
@@ -2029,6 +2116,11 @@ void
 CGroup::ResetStats()
 {
 	GPOS_ASSERT(!FScalar());
+	if (m_budget_completions != nullptr)
+	{
+		m_budget_completions->Release();
+		m_budget_completions = nullptr;
+	}
 
 	IStatistics *stats = nullptr;
 	{

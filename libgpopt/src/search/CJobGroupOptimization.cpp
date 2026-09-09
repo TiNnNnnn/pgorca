@@ -11,6 +11,7 @@
 
 #include "gpopt/search/CJobGroupOptimization.h"
 
+#include "gpopt/base/CCostContext.h"
 #include "gpopt/engine/CEngine.h"
 #include "gpopt/search/CGroup.h"
 #include "gpopt/search/CGroupExpression.h"
@@ -201,7 +202,20 @@ CJobGroupOptimization::FScheduleGroupExpressions(CSchedulerContext *psc)
 		{
 			const ULONG ulOptRequests =
 				CPhysical::PopConvert(pgexpr->Pop())->UlOptRequests();
-			for (ULONG ul = 0; ul < ulOptRequests; ul++)
+			CCost lower_bound(GPOPT_INVALID_COST);
+			const BOOL pruned = psc->Peng()->FCostBudgetSearchEnabled() &&
+				psc->Peng()->FSafeToPrune(pgexpr, m_poc->Prpp(), nullptr,
+					gpos::ulong_max, &lower_bound, m_poc, true /*cached_only*/);
+			if (pruned)
+			{
+				// Appendix A: reject before requesting child optimization.
+				// Use only an existing bound here; on a miss, preserve the
+				// normal property checks before computing a new partial plan.
+				// No candidate was costed: retain the shared bound, not a
+				// separate pruned cost context for every budget/opt request.
+				psc->Peng()->RecordCostBudgetPrecheck(ulOptRequests);
+			}
+			for (ULONG ul = 0; !pruned && ul < ulOptRequests; ul++)
 			{
 				// schedule an optimization job for each request
 				CJobGroupExpressionOptimization::ScheduleJob(psc, pgexpr, m_poc,
@@ -304,7 +318,7 @@ CJobGroupOptimization::EevtOptimizeChildren(CSchedulerContext *psc,
 //
 //---------------------------------------------------------------------------
 CJobGroupOptimization::EEvent
-CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *,  // psc
+CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *psc,
 												CJob *pjOwner)
 {
 	// get a job pointer
@@ -322,6 +336,11 @@ CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *,  // psc
 
 	// move optimization context to optimized state
 	pjgo->m_poc->SetState(COptimizationContext::estOptimized);
+	if (psc->Peng()->FCostBudgetSearchEnabled())
+	{
+		pjgo->m_pgroup->RecordBudgetCompletion(pjgo->m_poc);
+	}
+	psc->Peng()->RecordCostBudget(pjgo->m_poc, false);
 
 	return eevOptimized;
 }
@@ -352,17 +371,30 @@ CJobGroupOptimization::FExecute(CSchedulerContext *psc)
 //		Schedule a new group optimization job
 //
 //---------------------------------------------------------------------------
-void
+COptimizationContext *
 CJobGroupOptimization::ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
 								   CGroupExpression *pgexprOrigin,
 								   COptimizationContext *poc, CJob *pjParent)
 {
+	if (psc->Peng()->FCostBudgetSearchEnabled())
+	{
+		BOOL rejected = false;
+		auto *completed = pgroup->PocReuseCompleted(poc, &rejected);
+		if (completed != nullptr)
+		{
+			psc->Peng()->RecordCostBudgetReuse(poc, completed, rejected);
+			// No job/queue completion to synthesize: the caller either uses
+			// the already completed optimum or discards this physical branch.
+			return rejected || completed->PccBest() == nullptr ? nullptr : completed;
+		}
+	}
 	CJob *pj = psc->Pjf()->PjCreate(CJob::EjtGroupOptimization);
 
 	// initialize job
 	CJobGroupOptimization *pjgo = PjConvert(pj);
 	pjgo->Init(pgroup, pgexprOrigin, poc);
 	psc->Psched()->Add(pjgo, pjParent);
+	return pjgo->m_poc;
 }
 
 #ifdef GPOS_DEBUG

@@ -11,8 +11,14 @@
 
 #include "gpopt/search/CJobGroupExpressionOptimization.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 #include "gpopt/base/CCostContext.h"
+#include "gpopt/base/CPartInfo.h"
 #include "gpopt/base/CDrvdPropCtxtPlan.h"
+#include "gpopt/base/COptCtxt.h"
 #include "gpopt/base/CReqdPropPlan.h"
 #include "gpopt/engine/CEngine.h"
 #include "gpopt/operators/CExpressionHandle.h"
@@ -185,6 +191,7 @@ CJobGroupExpressionOptimization::Init(CGroupExpression *pgexpr,
 									  CReqdPropPlan *prppCTEProducer)
 {
 	GPOS_ASSERT(nullptr != poc);
+	GPOS_ASSERT(m_child_requests.empty());
 
 	CJobGroupExpression::Init(pgexpr);
 	GPOS_ASSERT(pgexpr->Pop()->FPhysical());
@@ -242,6 +249,7 @@ CJobGroupExpressionOptimization::Init(CGroupExpression *pgexpr,
 void
 CJobGroupExpressionOptimization::Cleanup()
 {
+	m_child_requests.clear();
 	CRefCount::SafeRelease(m_pdrgpoc);
 	CRefCount::SafeRelease(m_pdrgpstatCurrentCtxt);
 	CRefCount::SafeRelease(m_pdrgpdp);
@@ -329,7 +337,7 @@ CJobGroupExpressionOptimization::EevtInitialize(CSchedulerContext *psc,
 	CCost costLowerBound(GPOPT_INVALID_COST);
 	if (psc->Peng()->FSafeToPrune(
 			pjgeo->m_pgexpr, pjgeo->m_poc->Prpp(), nullptr /*pccChild*/,
-			gpos::ulong_max /*child_index*/, &costLowerBound))
+			gpos::ulong_max /*child_index*/, &costLowerBound, pjgeo->m_poc))
 	{
 		(void) pjgeo->m_pgexpr->PccComputeCost(
 			psc->GetGlobalMemoryPool(), pjgeo->m_poc, pjgeo->m_ulOptReq,
@@ -366,9 +374,11 @@ CJobGroupExpressionOptimization::DerivePrevChildProps(CSchedulerContext *psc)
 		return;
 	}
 
-	COptimizationContext *pocChild = pgroupChild->PocLookupBest(
-		psc->GetGlobalMemoryPool(), psc->Peng()->UlSearchStages(),
-		m_pexprhdlPlan->Prpp(ulPrevChildIndex));
+	COptimizationContext *pocChild = m_child_requests.empty()
+		? pgroupChild->PocLookupBest(
+			psc->GetGlobalMemoryPool(), psc->Peng()->UlSearchStages(),
+			m_pexprhdlPlan->Prpp(ulPrevChildIndex))
+		: m_child_requests[ulPrevChildIndex];
 	GPOS_ASSERT(nullptr != pocChild);
 
 	CCostContext *pccChildBest = pocChild->PccBest();
@@ -382,7 +392,7 @@ CJobGroupExpressionOptimization::DerivePrevChildProps(CSchedulerContext *psc)
 	// check if job can be early terminated after previous children have been optimized
 	CCost costLowerBound(GPOPT_INVALID_COST);
 	if (psc->Peng()->FSafeToPrune(m_pgexpr, m_poc->Prpp(), pccChildBest,
-								  ulPrevChildIndex, &costLowerBound))
+								  ulPrevChildIndex, &costLowerBound, m_poc))
 	{
 		// failed to optimize child due to cost bounding
 		(void) m_pgexpr->PccComputeCost(psc->GetGlobalMemoryPool(), m_poc,
@@ -475,12 +485,82 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 	{
 		return;
 	}
+	DOUBLE cost_limit = -1.0;
+	const BOOL budget_search = psc->Peng()->FCostBudgetSearchEnabled();
+	if (budget_search)
+	{
+		if (m_child_requests.empty())
+		{
+			m_child_requests.resize(m_ulArity, nullptr);
+		}
+		ICostModel *cost_model = COptCtxt::PoctxtFromTLS()->GetCostModel();
+		if (cost_model->FChildrenCostFloor(*m_pexprhdlPlan))
+		{
+			// Appendix A: tighten to a feasible incumbent, then subtract
+			// completed siblings and certified local work on their actual rows.
+			cost_limit = m_poc->CostLimit();
+			if (m_poc->PccBest() != nullptr)
+			{
+				const DOUBLE best = m_poc->PccBest()->Cost().Get();
+				cost_limit = cost_limit < 0.0 ? best : std::min(cost_limit, best);
+			}
+			// At CCost's saturation ceiling, every representable cost fits.
+			// Subtraction would incorrectly turn that into a finite restriction.
+			if (cost_limit >= GPOS_FP_ABS_MAX)
+			{
+				cost_limit = -1.0;
+			}
+			if (cost_limit >= 0.0)
+			{
+				for (ULONG child = 0; child < m_child_requests.size(); ++child)
+				{
+					auto *sibling = m_child_requests[child];
+					if (sibling != nullptr && sibling->PccBest() != nullptr)
+					{
+						GPOS_ASSERT(sibling->Est() == COptimizationContext::estOptimized);
+						auto *best = sibling->PccBest();
+						cost_limit = std::nextafter(
+							cost_limit - best->Cost().Get(),
+							std::numeric_limits<DOUBLE>::infinity());
+						// Parameterized expressions can have fractional rebinds.
+						// Otherwise CostCompute guarantees at least one execution.
+						if (cost_limit >= 0.0 && !m_pexprhdlPlan->HasOuterRefs())
+						{
+							const DOUBLE rows = best->Pdpplan()->Pds()->Edpt() ==
+								CDistributionSpec::EdptPartitioned
+								? best->DRowsPerHost().Get() : best->Pstats()->Rows().Get();
+							const DOUBLE local = cost_model->CostLocalInputLowerBound(
+								*m_pexprhdlPlan, child, rows);
+							if (local > 0.0)
+							{
+								cost_limit = std::nextafter(cost_limit - local,
+									std::numeric_limits<DOUBLE>::infinity());
+								psc->Peng()->RecordCostBudgetLocalBound(cost_limit < 0.0);
+							}
+						}
+					}
+				}
+				if (cost_limit < 0.0)
+				{
+					m_fChildOptimizationFailed = true;
+					return;
+				}
+			}
+		}
+	}
 	m_pexprhdlPlan->Prpp(m_ulChildIndex)->AddRef();
 
 	// use current stats for optimizing current child
 	IStatisticsArray *stats_ctxt = GPOS_NEW(psc->GetGlobalMemoryPool())
 		IStatisticsArray(psc->GetGlobalMemoryPool());
-	CUtils::AddRefAppend(stats_ctxt, m_pdrgpstatCurrentCtxt);
+	// External statistics affect outer references and dynamic partition
+	// elimination. Otherwise they only split identical budget problems by
+	// unrelated sibling-statistics identities. Keep the legacy path intact.
+	if (!budget_search || m_pexprhdlPlan->HasOuterRefs(m_ulChildIndex) ||
+		m_pexprhdlPlan->DerivePartitionInfo(m_ulChildIndex)->UlConsumers() > 0)
+	{
+		CUtils::AddRefAppend(stats_ctxt, m_pdrgpstatCurrentCtxt);
+	}
 
 	// compute required relational properties
 	CReqdPropRelational *prprel = nullptr;
@@ -501,9 +581,10 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 	COptimizationContext *pocChild = GPOS_NEW(psc->GetGlobalMemoryPool())
 		COptimizationContext(psc->GetGlobalMemoryPool(), pgroupChild,
 							 m_pexprhdlPlan->Prpp(m_ulChildIndex), prprel,
-							 stats_ctxt, psc->Peng()->UlCurrSearchStage());
+							 stats_ctxt, psc->Peng()->UlCurrSearchStage(), cost_limit);
 
-	if (pgroupChild == m_pgexpr->Pgroup() && pocChild->Matches(m_poc))
+	if (pgroupChild == m_pgexpr->Pgroup() &&
+		pocChild->Prpp()->Equals(m_poc->Prpp()))
 	{
 		// this is to prevent deadlocks, child context cannot be the same as parent context
 		m_fChildOptimizationFailed = true;
@@ -512,8 +593,19 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 		return;
 	}
 
-	CJobGroupOptimization::ScheduleJob(psc, pgroupChild, m_pgexpr, pocChild,
-									   this);
+	COptimizationContext *resolved = CJobGroupOptimization::ScheduleJob(
+		psc, pgroupChild, m_pgexpr, pocChild, this);
+	if (resolved == nullptr)
+	{
+		// A completed result proves this request cannot meet its ceiling.
+		m_fChildOptimizationFailed = true;
+		pocChild->Release();
+		return;
+	}
+	if (budget_search)
+	{
+		m_child_requests[m_ulChildIndex] = resolved;
+	}
 	pocChild->Release();
 
 	// advance to next child
@@ -573,8 +665,31 @@ CJobGroupExpressionOptimization::EevtAddEnforcers(CSchedulerContext *psc,
 
 	// build child contexts array
 	GPOS_ASSERT(nullptr == pjgeo->m_pdrgpoc);
-	pjgeo->m_pdrgpoc = psc->Peng()->PdrgpocChildren(psc->GetGlobalMemoryPool(),
+	if (pjgeo->m_child_requests.empty())
+	{
+		pjgeo->m_pdrgpoc = psc->Peng()->PdrgpocChildren(psc->GetGlobalMemoryPool(),
 													*pjgeo->m_pexprhdlPlan);
+	}
+	else
+	{
+		pjgeo->m_pdrgpoc = GPOS_NEW(psc->GetGlobalMemoryPool())
+			COptimizationContextArray(psc->GetGlobalMemoryPool());
+		for (ULONG ul = 0; ul < pjgeo->m_ulArity; ++ul)
+		{
+			if ((*pjgeo->m_pgexpr)[ul]->FScalar())
+			{
+				continue;
+			}
+			auto *child = pjgeo->m_child_requests[ul];
+			if (child == nullptr || child->PccBest() == nullptr)
+			{
+				pjgeo->Cleanup();
+				return eevFinalized;
+			}
+			child->AddRef();
+			pjgeo->m_pdrgpoc->Append(child);
+		}
+	}
 
 	// enforce physical properties
 	BOOL fCheckEnfdProps = psc->Peng()->FCheckEnfdProps(

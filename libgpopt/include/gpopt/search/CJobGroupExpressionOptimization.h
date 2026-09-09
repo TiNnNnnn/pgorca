@@ -11,6 +11,8 @@
 #ifndef GPOPT_CJobGroupExpressionOptimization_H
 #define GPOPT_CJobGroupExpressionOptimization_H
 
+#include <vector>
+
 #include "gpos/base.h"
 
 #include "gpopt/base/COptimizationContext.h"
@@ -83,6 +85,10 @@ private:
 
 	// array of child groups optimization contexts
 	COptimizationContextArray *m_pdrgpoc;
+	// Exact child requests (including their immutable budgets). A lookup by
+	// properties alone must not replace a bounded failure with another request.
+	// Borrowed from their groups' context tables, like m_poc; pinned by Init.
+	std::vector<COptimizationContext *> m_child_requests;
 
 	// stats context to be used during costing
 	IStatisticsArray *m_pdrgpstatCurrentCtxt;

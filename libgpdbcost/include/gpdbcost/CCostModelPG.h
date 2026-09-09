@@ -140,6 +140,9 @@ public:
 
 	CCost Cost(CExpressionHandle &exprhdl,
 			   const SCostingInfo *pci) const override;
+	BOOL FChildrenCostFloor(CExpressionHandle &exprhdl) const override;
+	DOUBLE CostLocalInputLowerBound(CExpressionHandle &exprhdl, ULONG child_index,
+								  DOUBLE rows) const override;
 
 	ECostModelType
 	Ecmt() const override

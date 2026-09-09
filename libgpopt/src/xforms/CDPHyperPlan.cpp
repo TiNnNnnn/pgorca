@@ -158,6 +158,48 @@ CDPHyperPlan::FoundSubgraphPair(const CBitSet *left, const CBitSet *right,
 }
 
 BOOL
+CDPHyperPlan::Matches(const CDPHyperPlan &other) const
+{
+	if (m_budget_exhausted || other.m_budget_exhausted ||
+		PairCount() != other.PairCount() || SeenCount() != other.SeenCount())
+	{
+		return false;
+	}
+	for (const auto &bucket : m_seen)
+	{
+		for (const CBitSet *nodes : bucket.second)
+		{
+			if (!other.HasSeen(nodes))
+			{
+				return false;
+			}
+		}
+	}
+	for (const SPair *pair : m_pairs)
+	{
+		CAutoRef<CBitSet> joined(GPOS_NEW(m_mp) CBitSet(m_mp, *pair->m_left));
+		joined->Union(pair->m_right);
+		const SPair *match = other.Ppair(pair->m_left, pair->m_right,
+									   joined->HashValue());
+		if (nullptr == match || pair->m_connecting_edges.size() !=
+								   match->m_connecting_edges.size())
+		{
+			return false;
+		}
+		for (ULONG edge : pair->m_connecting_edges)
+		{
+			if (match->m_connecting_edges.end() ==
+				std::find(match->m_connecting_edges.begin(),
+						  match->m_connecting_edges.end(), edge))
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+BOOL
 CDPHyperPlan::Complete(ULONG node_count) const
 {
 	if (m_budget_exhausted || 0 == node_count)

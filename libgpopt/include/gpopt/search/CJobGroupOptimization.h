@@ -125,8 +125,9 @@ public:
 	// schedule optimization jobs for of all new group expressions
 	BOOL FScheduleGroupExpressions(CSchedulerContext *psc) override;
 
-	// schedule a new group optimization job
-	static void ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
+	// Return a completed result or schedule a new group optimization job.
+	// NULL means a completed certificate already proves this request fails.
+	static COptimizationContext *ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
 							CGroupExpression *pgexprOrigin,
 							COptimizationContext *poc, CJob *pjParent);
 

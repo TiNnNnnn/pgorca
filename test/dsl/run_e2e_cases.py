@@ -230,6 +230,14 @@ def experiment_setting(args: argparse.Namespace, expected: dict[str, object]) ->
     return f"SET pg_orca.dsl_stats_experiment_path='{escaped}';"
 
 
+def dphyper_experiment_settings(expected: dict[str, object]) -> str:
+    return "\n".join(
+        bool_guc_setting(f"pg_orca.{name}", expected[name], False)
+        for name in ("dphyper_top_down", "dphyper_verify", "enable_cost_budget")
+        if name in expected
+    )
+
+
 def run_plan(args: argparse.Namespace, query: str, plan: dict[str, object]) -> str:
     enabled = "on" if plan.get("dsl", True) else "off"
     trace = "on" if plan.get("trace", False) else "off"
@@ -249,6 +257,7 @@ SET pg_orca.enable_dsl_rule={enabled};
 {bool_guc_setting('pg_orca.dphyper_shadow', plan.get('dphyper_shadow'), True)}
 SET pg_orca.dphyper_edge_budget={edge_budget};
 SET pg_orca.dphyper_pair_budget={pair_budget};
+{dphyper_experiment_settings(plan)}
 {native_setting(bool(plan.get('native', True)))}
 {disabled_xform_settings(plan, args.disable_xform)}
 SET optimizer_print_xform={xform_trace};
@@ -295,7 +304,8 @@ def actual_plan(expected: dict[str, object], output: str) -> dict[str, object]:
         for key in (
             "name", "dsl", "xform_trace", "dphyper", "dphyper_edge_budget",
             "dphyper_pair_budget", "dphyper_shadow", "native", "trace",
-            "disable_xforms", "policy", "stats_experiment", "assert_maxonerow"
+            "disable_xforms", "policy", "stats_experiment", "assert_maxonerow",
+            "dphyper_top_down", "dphyper_verify", "enable_cost_budget"
         )
         if key in expected
     }
@@ -356,6 +366,7 @@ SET pg_orca.enable_dphyper={'on' if expected.get('dphyper', False) else 'off'};
 SET pg_orca.dphyper_shadow={'on' if expected.get('dphyper_shadow', True) else 'off'};
 SET pg_orca.dphyper_edge_budget={int(expected.get('dphyper_edge_budget', 100000))};
 SET pg_orca.dphyper_pair_budget={int(expected.get('dphyper_pair_budget', 100))};
+{dphyper_experiment_settings(expected)}
 {native_setting(bool(expected.get('native', True)))}
 {disabled_xform_settings(expected, args.disable_xform)}
 COPY ({query}) TO STDOUT WITH (FORMAT csv);
@@ -376,7 +387,7 @@ COPY ({query}) TO STDOUT WITH (FORMAT csv);
         for key in (
             "dphyper", "dphyper_shadow", "dphyper_edge_budget",
             "dphyper_pair_budget", "native", "disable_xforms", "policy",
-            "assert_maxonerow"
+            "assert_maxonerow", "dphyper_top_down", "dphyper_verify", "enable_cost_budget"
         )
         if key in expected
     }

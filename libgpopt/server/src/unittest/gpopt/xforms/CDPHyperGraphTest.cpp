@@ -7,20 +7,38 @@
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
+#include <limits>
+#include <set>
 #include <utility>
 #include <vector>
 
 #include "gpos/common/CAutoRef.h"
 #include "gpos/common/CBitSetIter.h"
+#include "gpos/common/CWallClock.h"
 #include "gpos/memory/CAutoMemoryPool.h"
 #include "gpos/test/CUnittest.h"
 
 #include "gpopt/base/CUtils.h"
+#include "gpdbcost/CCostModelPG.h"
+#include "gpopt/operators/CExpressionHandle.h"
+#include "gpopt/operators/CPhysicalInnerHashJoin.h"
+#include "gpopt/operators/CPhysicalLeftAntiSemiHashJoinBuildOuter.h"
+#include "gpopt/base/CCTEReq.h"
+#include "gpopt/base/CDistributionSpecSingleton.h"
+#include "gpopt/base/CEnfdDistribution.h"
+#include "gpopt/base/CEnfdOrder.h"
+#include "gpopt/base/CEnfdPartitionPropagation.h"
+#include "gpopt/base/CEnfdRewindability.h"
+#include "gpopt/base/COptimizationContext.h"
+#include "gpopt/base/CReqdPropPlan.h"
+#include "gpopt/base/CReqdPropRelational.h"
 #include "gpopt/operators/CLogicalLeftAntiSemiJoin.h"
 #include "gpopt/operators/CLogicalLeftAntiSemiJoinNotIn.h"
 #include "gpopt/operators/CLogicalLeftSemiJoin.h"
 #include "gpopt/operators/CLogicalProject.h"
 #include "gpopt/operators/CLogicalSelect.h"
+#include "gpopt/operators/CPhysicalSort.h"
+#include "naucrates/statistics/CStatistics.h"
 #include "gpopt/operators/CPatternTree.h"
 #include "gpopt/operators/CPredicateUtils.h"
 #include "gpopt/operators/CScalarIdent.h"
@@ -35,6 +53,7 @@
 #include "gpopt/xforms/CDPHyperJoinRegion.h"
 #include "gpopt/xforms/CDPHyperOrderConstraints.h"
 #include "gpopt/xforms/CDPHyperPlan.h"
+#include "gpopt/xforms/CTDHyperEnumerator.h"
 #include "gpopt/xforms/CJoinRegionSpec.h"
 #include "unittest/gpopt/dsl/CDSLTestFixture.h"
 
@@ -484,6 +503,9 @@ CDPHyperGraphTest::EresUnittest()
 		GPOS_UNITTEST_FUNC(
 			CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_AtomicBudget),
+		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_TopDown),
+		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_CostBudgetContexts),
+		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_CostInputBounds),
 		GPOS_UNITTEST_FUNC(
 			CDPHyperGraphTest::EresUnittest_GraphSimplifierInfrastructure),
 		GPOS_UNITTEST_FUNC(CDPHyperGraphTest::EresUnittest_GraphSimplifier),
@@ -502,6 +524,234 @@ CDPHyperGraphTest::EresUnittest()
 			CDPHyperGraphTest::EresUnittest_CartesianDifferential),
 	};
 	return CUnittest::EresExecute(rgut, GPOS_ARRAY_SIZE(rgut));
+}
+
+GPOS_RESULT
+CDPHyperGraphTest::EresUnittest_CostInputBounds()
+{
+	CAutoMemoryPool amp;
+	CMemoryPool *mp = amp.Pmp();
+	CDSLTestFixture fixture(mp);
+	CAutoRef<gpdbcost::CCostModelPG> model(GPOS_NEW(mp) gpdbcost::CCostModelPG(mp, 1));
+	for (BOOL build_outer : {false, true})
+	{
+		for (ULONG key_count : {1u, 3u})
+		{
+			CColRefArray *left_cols, *right_cols;
+			auto *left = fixture.PexprLogicalGet("left", key_count, &left_cols);
+			auto *right = fixture.PexprLogicalGet("right", key_count, &right_cols);
+			auto *left_keys = GPOS_NEW(mp) CExpressionArray(mp);
+			auto *right_keys = GPOS_NEW(mp) CExpressionArray(mp);
+			auto *predicates = GPOS_NEW(mp) CExpressionArray(mp);
+			for (ULONG key = 0; key < key_count; ++key)
+			{
+				left_keys->Append(GPOS_NEW(mp) CExpression(mp,
+					GPOS_NEW(mp) CScalarIdent(mp, (*left_cols)[key])));
+				right_keys->Append(GPOS_NEW(mp) CExpression(mp,
+					GPOS_NEW(mp) CScalarIdent(mp, (*right_cols)[key])));
+				predicates->Append(fixture.PexprEqPred((*left_cols)[key], (*right_cols)[key]));
+			}
+			COperator *join = build_outer
+				? static_cast<COperator *>(GPOS_NEW(mp) CPhysicalLeftAntiSemiHashJoinBuildOuter(
+					mp, left_keys, right_keys, nullptr))
+				: GPOS_NEW(mp) CPhysicalInnerHashJoin(mp, left_keys, right_keys, nullptr);
+			CAutoRef<CExpression> expr(GPOS_NEW(mp) CExpression(mp, join, left, right,
+				CPredicateUtils::PexprConjunction(mp, predicates)));
+			CExpressionHandle handle(mp);
+			handle.Attach(expr.Value());
+			auto *stats = GPOS_NEW(mp) CStatistics(mp, GPOS_NEW(mp) UlongToHistogramMap(mp),
+				GPOS_NEW(mp) UlongToDoubleMap(mp), CDouble(1.0), false);
+			ICostModel::SCostingInfo info(mp, 2, GPOS_NEW(mp) ICostModel::CCostingStats(stats));
+			info.SetWidth(8.0);
+			for (ULONG child = 0; child < 2; ++child)
+			{
+				info.SetChildWidth(child, 8.0);
+				info.SetChildCost(child, 0.0);
+				info.SetChildRebinds(child, 1.0);
+			}
+			for (DOUBLE rows : {0.0, 1e-260, 0.5, 1.0, 1000.0, 1e6})
+			{
+				info.SetChildRows(0, rows);
+				info.SetChildRows(1, rows * 2.0);
+				const DOUBLE floor = model->CostLocalInputLowerBound(handle, 0, rows) +
+					model->CostLocalInputLowerBound(handle, 1, rows * 2.0);
+				GPOS_ASSERT(rows == 0.0 ? floor == 0.0 : floor > 0.0);
+				for (DOUBLE output : {0.0, 1.0, 1e6})
+				{
+					info.SetRows(output);
+					for (DOUBLE rebinds : {1.0, 2.0, 100.0})
+					{
+						info.SetRebinds(rebinds);
+						GPOS_ASSERT(model->Cost(handle, &info).Get() >= floor);
+					}
+				}
+			}
+			const ULONG build = build_outer ? 0 : 1;
+			// Test saturation without overflowing the existing selectivity math.
+			GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 0, 1e260) +
+				model->CostLocalInputLowerBound(handle, 1, 1e260) < GPOS_FP_ABS_MAX);
+			GPOS_ASSERT(model->CostLocalInputLowerBound(handle, build, 100.0) >
+				model->CostLocalInputLowerBound(handle, 1 - build, 100.0));
+			for (DOUBLE invalid : {-1.0, std::numeric_limits<DOUBLE>::infinity(),
+				std::numeric_limits<DOUBLE>::quiet_NaN()})
+			{
+				GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 0, invalid) == 0.0);
+			}
+			GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 2, 100.0) == 0.0);
+		}
+	}
+	CAutoRef<CExpression> sort(GPOS_NEW(mp) CExpression(mp,
+		GPOS_NEW(mp) CPhysicalSort(mp, GPOS_NEW(mp) COrderSpec(mp))));
+	CExpressionHandle handle(mp);
+	handle.Attach(sort.Value());
+	GPOS_ASSERT(!model->FChildrenCostFloor(handle));
+	GPOS_ASSERT(model->CostLocalInputLowerBound(handle, 0, 100.0) == 0.0);
+	return GPOS_OK;
+}
+
+GPOS_RESULT
+CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
+{
+	CAutoMemoryPool amp;
+	CMemoryPool *mp = amp.Pmp();
+	CDSLTestFixture fixture(mp);
+	CAutoRef<CGroup> group(GPOS_NEW(mp) CGroup(mp, false));
+	const auto props = [&]() { return GPOS_NEW(mp) CReqdPropPlan(
+		GPOS_NEW(mp) CColRefSet(mp),
+		GPOS_NEW(mp) CEnfdOrder(GPOS_NEW(mp) COrderSpec(mp), CEnfdOrder::EomSatisfy),
+		GPOS_NEW(mp) CEnfdDistribution(GPOS_NEW(mp) CDistributionSpecSingleton(),
+			CEnfdDistribution::EdmSatisfy),
+		GPOS_NEW(mp) CEnfdRewindability(GPOS_NEW(mp) CRewindabilitySpec(
+			CRewindabilitySpec::ErtNone, CRewindabilitySpec::EmhtNoMotion),
+			CEnfdRewindability::ErmSatisfy),
+		GPOS_NEW(mp) CEnfdPartitionPropagation(GPOS_NEW(mp) CPartitionPropagationSpec(mp),
+			CEnfdPartitionPropagation::EppmSatisfy), GPOS_NEW(mp) CCTEReq(mp)); };
+	const auto request = [&](DOUBLE limit, BOOL different_stats = false,
+		ULONG stage = 0, BOOL different_props = false) {
+		auto *required = props();
+		if (different_props)
+		{
+			required->PcrsRequired()->Include(fixture.PcrCreateInt4("output_column"));
+		}
+		auto *columns = GPOS_NEW(mp) CColRefSet(mp);
+		if (different_stats)
+		{
+			columns->Include(fixture.PcrCreateInt4("stats_column"));
+		}
+		return GPOS_NEW(mp) COptimizationContext(mp, group.Value(), required,
+			GPOS_NEW(mp) CReqdPropRelational(columns),
+			GPOS_NEW(mp) IStatisticsArray(mp), stage, limit);
+	};
+	CAutoRef<COptimizationContext> small(request(1.0));
+	CAutoRef<COptimizationContext> repeated(request(1.0));
+	CAutoRef<COptimizationContext> wide(request(10.0));
+	CAutoRef<COptimizationContext> unlimited(request(-1.0));
+	CAutoRef<COptimizationContext> other_stats(request(1.0, true));
+	CAutoRef<COptimizationContext> zero(request(0.0));
+	CAutoRef<COptimizationContext> negative_zero(request(-0.0));
+	GPOS_UNITTEST_ASSERT(zero->Matches(negative_zero.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::HashValue(*zero.Value()) ==
+		COptimizationContext::HashValue(*negative_zero.Value()));
+	// Simulate a completed, failed budget request; it must not poison a
+	// later wider or unbounded search in the same group and properties.
+	small->SetState(COptimizationContext::estOptimizing);
+	small->SetState(COptimizationContext::estOptimized);
+	GPOS_UNITTEST_ASSERT(small->PccBest() == nullptr);
+	small->AddRef(); // group owns inserted contexts
+	GPOS_UNITTEST_ASSERT(group->PocInsert(small.Value()) == small.Value());
+	GPOS_UNITTEST_ASSERT(group->PocInsert(repeated.Value()) == small.Value());
+	for (auto *context : {wide.Value(), unlimited.Value(), other_stats.Value()})
+	{
+		GPOS_UNITTEST_ASSERT(!small->Matches(context));
+		context->AddRef();
+		GPOS_UNITTEST_ASSERT(group->PocInsert(context) == context);
+	}
+	GPOS_UNITTEST_ASSERT(!unlimited->FBounded());
+	GPOS_UNITTEST_ASSERT(COptimizationContext::FEqualForStats(small.Value(), wide.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::UlHashForStats(small.Value()) ==
+		COptimizationContext::UlHashForStats(wide.Value()));
+	group->RecordBudgetCompletion(small.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(zero.Value()) == small.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(wide.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_stats.Value()) == nullptr);
+	CAutoRef<COptimizationContext> other_stage(request(0.0, false, 1));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_stage.Value()) == nullptr);
+	CAutoRef<COptimizationContext> other_props(request(0.0, false, 0, true));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_props.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(COptimizationContext::FEqualForStats(small.Value(), other_props.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::UlHashForStats(small.Value()) ==
+		COptimizationContext::UlHashForStats(other_props.Value()));
+
+	// An in-flight incumbent must not be published as an optimum. Only
+	// complete the request after all its alternatives have been visited.
+	CAutoRef<CGroupExpression> expr(GPOS_NEW(mp) CGroupExpression(mp,
+		GPOS_NEW(mp) CPhysicalSort(mp, GPOS_NEW(mp) COrderSpec(mp)),
+		GPOS_NEW(mp) CGroupArray(mp),
+		CXform::ExfInvalid, nullptr, false));
+	// No group/stats are attached: a cache-only miss must not try costing.
+	GPOS_UNITTEST_ASSERT(expr->CostLowerBound(mp, wide->Prpp(), nullptr,
+		gpos::ulong_max, true /*cached_only*/).Get() == GPOPT_INVALID_COST);
+	wide->AddRef();
+	expr->AddRef();
+	CAutoRef<CCostContext> cost(GPOS_NEW(mp) CCostContext(mp, wide.Value(), 0, expr.Value()));
+	cost->SetState(CCostContext::estCosting);
+	cost->SetCost(CCost(3.0));
+	cost->SetState(CCostContext::estCosted);
+	wide->SetState(COptimizationContext::estOptimizing);
+	wide->SetBest(cost.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == nullptr);
+	wide->SetState(COptimizationContext::estOptimized);
+	group->RecordBudgetCompletion(wide.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == wide.Value());
+	CAutoRef<COptimizationContext> tie(request(3.0));
+	CAutoRef<COptimizationContext> under(request(std::nextafter(3.0, 0.0)));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(tie.Value()) == wide.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value()) == nullptr);
+	BOOL rejected = true;
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(tie.Value(), &rejected) == wide.Value());
+	GPOS_UNITTEST_ASSERT(!rejected);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value(), &rejected) == wide.Value());
+	GPOS_UNITTEST_ASSERT(rejected);
+	// Reject the new request, never erase the feasible optimum or mark its
+	// context failed. A subsequent wider/unbounded request must still succeed.
+	GPOS_UNITTEST_ASSERT(wide->PccBest() == cost.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value(), &rejected) == wide.Value());
+	GPOS_UNITTEST_ASSERT(!rejected);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_stats.Value(), &rejected) == nullptr);
+	GPOS_UNITTEST_ASSERT(!rejected);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(zero.Value()) == small.Value());
+	CAutoRef<COptimizationContext> failure(request(2.0));
+	failure->SetState(COptimizationContext::estOptimizing);
+	failure->SetState(COptimizationContext::estOptimized);
+	failure->AddRef();
+	GPOS_UNITTEST_ASSERT(group->PocInsert(failure.Value()) == failure.Value());
+	group->RecordBudgetCompletion(failure.Value());
+	group->RecordBudgetCompletion(small.Value());
+	CAutoRef<COptimizationContext> middle(request(1.5));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(middle.Value()) == failure.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value()) == nullptr);
+	// Adding alternatives invalidates previous completion certificates.
+	expr->AddRef();
+	CGroupProxy(group.Value()).Insert(expr.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == nullptr);
+
+	// Equal coarse summaries are not evidence of equal distributions.
+	CAutoRef<ULongPtrArray> cols(GPOS_NEW(mp) ULongPtrArray(mp));
+	CAutoRef<COptimizationContext> stat_a(request(10.0));
+	CAutoRef<COptimizationContext> stat_b(request(10.0));
+	stat_a->Pdrgpstat()->Append(CStatistics::MakeDummyStats(mp, cols.Value(), CDouble(10)));
+	stat_b->Pdrgpstat()->Append(CStatistics::MakeDummyStats(mp, cols.Value(), CDouble(10)));
+	GPOS_UNITTEST_ASSERT(*(*stat_a->Pdrgpstat())[0] == *(*stat_b->Pdrgpstat())[0]);
+	GPOS_UNITTEST_ASSERT(!COptimizationContext::FEqualForStats(stat_a.Value(), stat_b.Value()));
+	GPOS_UNITTEST_ASSERT(!COptimizationContext::FEqualForBudgetReuse(stat_a.Value(), stat_b.Value()));
+	CAutoRef<COptimizationContext> stat_same(request(20.0));
+	(*stat_a->Pdrgpstat())[0]->AddRef();
+	stat_same->Pdrgpstat()->Append((*stat_a->Pdrgpstat())[0]);
+	GPOS_UNITTEST_ASSERT(COptimizationContext::FEqualForBudgetReuse(stat_a.Value(), stat_same.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::UlHashForBudgetReuse(stat_a.Value()) ==
+		COptimizationContext::UlHashForBudgetReuse(stat_same.Value()));
+	return GPOS_OK;
 }
 
 GPOS_RESULT
@@ -694,6 +944,9 @@ CDPHyperGraphTest::EresUnittest_ExhaustiveSimpleGraphs()
 		CRecordingReceiver receiver(mp);
 		CDPHyperEnumerator enumerator(mp, &graph, &receiver);
 		GPOS_UNITTEST_ASSERT(!enumerator.Enumerate());
+		CRecordingReceiver top_down(mp);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!td.Enumerate());
 		for (ULONG subset = 1; subset < (ULONG(1) << node_count); ++subset)
 		{
 			CAutoRef<CBitSet> nodes(GPOS_NEW(mp) CBitSet(mp));
@@ -706,6 +959,8 @@ CDPHyperGraphTest::EresUnittest_ExhaustiveSimpleGraphs()
 			}
 			GPOS_UNITTEST_ASSERT(FConnected(node_count, graph_mask, subset) ==
 							 receiver.HasSeen(nodes.Value()));
+			GPOS_UNITTEST_ASSERT(receiver.HasSeen(nodes.Value()) ==
+							 top_down.HasSeen(nodes.Value()));
 
 			// Validate every unordered CSG-CMP cut, not merely whether its
 			// union subset is reachable. Losing one cut reduces join-order
@@ -729,6 +984,7 @@ CDPHyperGraphTest::EresUnittest_ExhaustiveSimpleGraphs()
 					FConnected(node_count, graph_mask, right);
 				GPOS_UNITTEST_ASSERT(expected ==
 								 receiver.HasPair(left, right));
+				GPOS_UNITTEST_ASSERT(expected == top_down.HasPair(left, right));
 			}
 		}
 	}
@@ -758,12 +1014,12 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 	CAutoMemoryPool amp;
 	CMemoryPool *mp = amp.Pmp();
 	uint32_t random = 0x9e3779b9U;
-	for (ULONG graph_id = 0; graph_id < 512; ++graph_id)
+	for (ULONG graph_id = 0; graph_id < 512 + 64 * 15; ++graph_id)
 	{
 		CDPHyperGraph graph(mp, node_count);
 		std::vector<SMaskEdge> edges;
 		std::vector<BOOL> selected(catalog.size(), false);
-		const ULONG edge_count = graph_id % 9;
+		const ULONG edge_count = graph_id < 512 ? graph_id % 9 : 0;
 		for (ULONG edge_id = 0; edge_id < edge_count; ++edge_id)
 		{
 			random ^= random << 13;
@@ -777,6 +1033,34 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 			selected[index] = true;
 			const SMaskEdge edge = catalog[index];
 			edges.push_back(edge);
+		}
+		if (graph_id >= 512)
+		{
+			// Every four-node simple core and every nonempty endpoint joined
+			// to a fifth leaf. Exercise mandatory articulation connectors,
+			// optional cyclic routes, disconnected endpoints and shared reps
+			// against the independent oracle, not merely the DPHyp baseline.
+			const ULONG core = (graph_id - 512) / 15;
+			ULONG bit = 0;
+			for (ULONG l = 0; l < 4; ++l)
+			{
+				for (ULONG r = l + 1; r < 4; ++r, ++bit)
+				{
+					if (core & (ULONG(1) << bit))
+					{
+						edges.push_back({ULONG(1) << l, ULONG(1) << r});
+					}
+				}
+			}
+			edges.push_back({1 + (graph_id - 512) % 15, 16});
+			if (0 == graph_id % 7)
+			{
+				edges.push_back(edges.back());
+			}
+		}
+		for (ULONG edge_id = 0; edge_id < edges.size(); ++edge_id)
+		{
+			const SMaskEdge edge = edges[edge_id];
 			CAutoRef<CBitSet> left(PbsFromMask(mp, edge.m_left));
 			CAutoRef<CBitSet> right(PbsFromMask(mp, edge.m_right));
 			graph.AddEdge(left.Value(), right.Value(), edge_id);
@@ -785,6 +1069,9 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 		CRecordingReceiver receiver(mp);
 		CDPHyperEnumerator enumerator(mp, &graph, &receiver);
 		GPOS_UNITTEST_ASSERT(!enumerator.Enumerate());
+		CRecordingReceiver top_down(mp);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!td.Enumerate());
 		std::vector<INT> memo(ULONG(1) << node_count, -1);
 		memo[0] = 0;
 		for (ULONG subset = 1; subset <= all_nodes; ++subset)
@@ -793,6 +1080,8 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 			GPOS_UNITTEST_ASSERT(
 				FHyperConnected(subset, edges, &memo) ==
 				receiver.HasSeen(nodes.Value()));
+			GPOS_UNITTEST_ASSERT(receiver.HasSeen(nodes.Value()) ==
+							 top_down.HasSeen(nodes.Value()));
 
 			const ULONG anchor = subset & (~subset + 1);
 			for (ULONG left = (subset - 1) & subset; 0 != left;
@@ -824,7 +1113,425 @@ CDPHyperGraphTest::EresUnittest_DifferentialHypergraphs()
 				expected = expected && connected;
 				GPOS_UNITTEST_ASSERT(expected ==
 								 receiver.HasPair(left, right));
+				GPOS_UNITTEST_ASSERT(expected == top_down.HasPair(left, right));
 			}
+		}
+	}
+	return GPOS_OK;
+}
+
+GPOS_RESULT
+CDPHyperGraphTest::EresUnittest_TopDown()
+{
+	CAutoMemoryPool amp;
+	CMemoryPool *mp = amp.Pmp();
+	{
+		CDPHyperPlan first(mp, 10), different_edge(mp, 10);
+		for (ULONG node = 0; node < 2; ++node)
+		{
+			(void) first.FoundSingleNode(node);
+			(void) different_edge.FoundSingleNode(node);
+		}
+		CAutoRef<CBitSet> l(Pbs(mp, {0})), r(Pbs(mp, {1}));
+		(void) first.FoundSubgraphPair(l.Value(), r.Value(), 0);
+		(void) different_edge.FoundSubgraphPair(r.Value(), l.Value(), 1);
+		GPOS_UNITTEST_ASSERT(first.Complete(2) && different_edge.Complete(2));
+		GPOS_UNITTEST_ASSERT(!first.Matches(different_edge));
+		(void) first.FoundSubgraphPair(l.Value(), r.Value(), 1);
+		(void) different_edge.FoundSubgraphPair(r.Value(), l.Value(), 0);
+		GPOS_UNITTEST_ASSERT(first.Matches(different_edge));
+	}
+	uint32_t random = 0x31415926U;
+	auto next = [&]() {
+		random ^= random << 13;
+		random ^= random >> 17;
+		random ^= random << 5;
+		return random;
+	};
+	// Connected mixed hypergraphs, repeated representatives, distinct edge
+	// provenance, and a monotone dependency filter. Compare full cuts AND
+	// edge ids; equal counts alone cannot detect a substituted/missing cut.
+	for (ULONG trial = 0; trial < 256; ++trial)
+	{
+		CDPHyperGraph graph(mp, 6);
+		for (ULONG node = 1; node < 6; ++node)
+		{
+			AddSimpleEdge(mp, &graph, node - 1, node, node - 1);
+		}
+		for (ULONG id = 5; id < 11; ++id)
+		{
+			ULONG l = 1 + next() % 62;
+			ULONG r = (1 + next() % 63) & ~l;
+			if (0 == r)
+			{
+				r = 63 ^ l;
+			}
+			CAutoRef<CBitSet> left(PbsFromMask(mp, l));
+			CAutoRef<CBitSet> right(PbsFromMask(mp, r));
+			graph.AddEdge(left.Value(), right.Value(), id);
+		}
+		auto filter = [trial](const CBitSet *l, const CBitSet *r, ULONG) {
+			return 0 == trial % 2 || !(l->Get(0) || r->Get(0)) ||
+				!(l->Get(2) || r->Get(2)) || l->Get(1) || r->Get(1);
+		};
+		CDPHyperPlan bottom_up(mp, 10000, filter), top_down(mp, 10000, filter);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 63));
+		std::set<ULONG> cuts;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				GPOS_UNITTEST_ASSERT(l->Get(0) && l->IsDisjoint(r));
+				GPOS_UNITTEST_ASSERT(l->Size() + r->Size() == 6);
+				ULONG mask = 0;
+				CBitSetIter it(*l);
+				while (it.Advance())
+				{
+					mask |= ULONG(1) << it.Bit();
+				}
+				GPOS_UNITTEST_ASSERT(cuts.insert(mask).second);
+				return false;
+			}));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(td.Partition(all.Value(),
+			[&](const CBitSet *, const CBitSet *) { ++calls; return true; }));
+		GPOS_UNITTEST_ASSERT(1 == calls);
+		CDPHyperPlan limited(mp, 1, filter);
+		CTDHyperEnumerator aborting(mp, &graph, &limited);
+		GPOS_UNITTEST_ASSERT(aborting.Enumerate());
+		GPOS_UNITTEST_ASSERT(limited.BudgetExhausted() && limited.PairCount() == 1);
+		GPOS_UNITTEST_ASSERT(!limited.Complete(6));
+	}
+	// Dynamic bitsets: three connected vertices cross two machine words;
+	// isolated vertices remain visible and never acquire fictitious cuts.
+	{
+		CDPHyperGraph graph(mp, 129);
+		AddSimpleEdge(mp, &graph, 0, 64, 0);
+		AddSimpleEdge(mp, &graph, 64, 128, 1);
+		CDPHyperPlan bottom_up(mp, 100), top_down(mp, 100);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+		GPOS_UNITTEST_ASSERT(4 == top_down.PairCount());
+	}
+	// An articulation hyperedge with overlapping, non-separable endpoints
+	// (paper Fig. 5) contracts the full problem to a single valid cut.
+	{
+		CDPHyperGraph graph(mp, 5);
+		const std::vector<SMaskEdge> edges{{1, 2}, {3, 4}, {7, 8}, {12, 16}};
+		for (ULONG id = 0; id < edges.size(); ++id)
+		{
+			CAutoRef<CBitSet> l(PbsFromMask(mp, edges[id].m_left));
+			CAutoRef<CBitSet> r(PbsFromMask(mp, edges[id].m_right));
+			graph.AddEdge(l.Value(), r.Value(), id);
+		}
+		CDPHyperPlan bottom_up(mp, 100), top_down(mp, 100);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+		GPOS_UNITTEST_ASSERT(0 < td.Stats().m_compound_merges);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 31));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				++calls;
+				GPOS_UNITTEST_ASSERT(FSet(l, {0, 1, 2, 3}) && FSet(r, {4}));
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(1 == calls);
+	}
+	// Sec. 4.5.2: the endpoint {0,3} of a bridge hyperedge is inseparable.
+	// On a path its mandatory connector vertices must be absorbed. In a
+	// diamond, either route is optional and MUST remain independently usable.
+	for (ULONG diamond = 0; diamond < 2; ++diamond)
+	{
+		CDPHyperGraph graph(mp, 5);
+		if (diamond)
+		{
+			AddSimpleEdge(mp, &graph, 0, 1, 0);
+			AddSimpleEdge(mp, &graph, 1, 3, 1);
+			AddSimpleEdge(mp, &graph, 0, 2, 2);
+			AddSimpleEdge(mp, &graph, 2, 3, 3);
+		}
+		else
+		{
+			for (ULONG v = 0; v < 3; ++v)
+			{
+				AddSimpleEdge(mp, &graph, v, v + 1, v);
+			}
+		}
+		CAutoRef<CBitSet> endpoint(Pbs(mp, {0, 3})), leaf(Pbs(mp, {4}));
+		graph.AddEdge(endpoint.Value(), leaf.Value(), 4);
+		CDPHyperPlan bottom_up(mp, 1000), top_down(mp, 1000);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 31));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				++calls;
+				GPOS_UNITTEST_ASSERT(l->Get(0) && l->Get(3));
+				if (!diamond)
+				{
+					GPOS_UNITTEST_ASSERT(FSet(l, {0, 1, 2, 3}) && FSet(r, {4}));
+				}
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT((diamond ? 3 : 1) == calls);
+		GPOS_UNITTEST_ASSERT((diamond ? 0 : 2) == td.Stats().m_articulation_merges);
+		GPOS_UNITTEST_ASSERT(0 == td.Stats().m_cut_calls);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// Two cyclic blocks meet at 1. The mapped complex representatives are
+	// not bridges: keep all six candidates, including false cuts filtered by
+	// the original graph. Also exercise a simple bypass and shared provenance.
+	for (ULONG variant = 0; variant < 3; ++variant)
+	{
+		CDPHyperGraph graph(mp, 5);
+		AddSimpleEdge(mp, &graph, 0, 1, 0);
+		AddSimpleEdge(mp, &graph, 0, 2, 1);
+		AddSimpleEdge(mp, &graph, 1, 2, 2);
+		CAutoRef<CBitSet> endpoint(Pbs(mp, {1, 2}));
+		CAutoRef<CBitSet> three(Pbs(mp, {3})), four(Pbs(mp, {4}));
+		graph.AddEdge(endpoint.Value(), three.Value(), 3);
+		graph.AddEdge(endpoint.Value(), four.Value(), 4);
+		AddSimpleEdge(mp, &graph, 3, 4, 5);
+		if (1 == variant)
+		{
+			AddSimpleEdge(mp, &graph, 1, 3, 6);
+		}
+		else if (2 == variant)
+		{
+			graph.AddEdge(endpoint.Value(), three.Value(), 6);
+		}
+		CDPHyperPlan bottom_up(mp, 10000), top_down(mp, 10000);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 31));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *, const CBitSet *) { ++calls; return false; }));
+		GPOS_UNITTEST_ASSERT(6 == calls);
+		GPOS_UNITTEST_ASSERT(0 == td.Stats().m_compound_merges);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// Different complex exits from the same articulation are alternatives,
+	// not jointly mandatory endpoints. {2} can be separated because the
+	// other exit {1,5}->{4} still connects the remaining graph via {3,4}.
+	{
+		CDPHyperGraph graph(mp, 6);
+		const std::vector<SMaskEdge> edges = {
+			{1, 2}, {1, 4}, {2, 4}, {1, 32}, {2, 32},
+			{6, 8}, {34, 16}, {8, 16}};
+		for (ULONG id = 0; id < edges.size(); ++id)
+		{
+			CAutoRef<CBitSet> l(PbsFromMask(mp, edges[id].m_left));
+			CAutoRef<CBitSet> r(PbsFromMask(mp, edges[id].m_right));
+			graph.AddEdge(l.Value(), r.Value(), id);
+		}
+		CRecordingReceiver bottom_up(mp), top_down(mp);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		std::vector<INT> connected(64, -1);
+		GPOS_UNITTEST_ASSERT(FHyperConnected(59, edges, &connected));
+		GPOS_UNITTEST_ASSERT(bottom_up.HasPair(4, 59));
+		GPOS_UNITTEST_ASSERT(top_down.HasPair(4, 59));
+		GPOS_UNITTEST_ASSERT(bottom_up.HasPair(32, 31));
+		GPOS_UNITTEST_ASSERT(top_down.HasPair(32, 31));
+	}
+	// Three cyclic blocks linked at articulation vertices: all nine root
+	// cuts survive, with every off-block branch following its attachment.
+	{
+		CDPHyperGraph graph(mp, 7);
+		for (ULONG base = 0; base < 6; base += 2)
+		{
+			AddSimpleEdge(mp, &graph, base, base + 1, base * 3);
+			AddSimpleEdge(mp, &graph, base + 1, base + 2, base * 3 + 1);
+			AddSimpleEdge(mp, &graph, base, base + 2, base * 3 + 2);
+		}
+		CDPHyperPlan bottom_up(mp, 10000), top_down(mp, 10000);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 127));
+		std::set<ULONG> cuts;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				GPOS_UNITTEST_ASSERT(l->Get(0) && l->IsDisjoint(r));
+				GPOS_UNITTEST_ASSERT(l->Size() + r->Size() == 7);
+				ULONG mask = 0;
+				CBitSetIter it(*l);
+				while (it.Advance())
+				{
+					mask |= ULONG(1) << it.Bit();
+				}
+				GPOS_UNITTEST_ASSERT(cuts.insert(mask).second);
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(9 == cuts.size());
+		GPOS_UNITTEST_ASSERT(3 == td.Stats().m_block_partitions);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// A star has many connected subsets but just n-1 root cuts. A block
+	// decomposition emits those bridges directly, with zero cut search calls.
+	// It also preserves immediate callback cancellation across block boundaries.
+	{
+		CDPHyperGraph graph(mp, 12);
+		for (ULONG v = 1; v < 12; ++v)
+		{
+			AddSimpleEdge(mp, &graph, 0, v, v);
+		}
+		CDPHyperPlan unused(mp, 1);
+		CTDHyperEnumerator td(mp, &graph, &unused);
+		CAutoRef<CBitSet> all(PbsFromMask(mp, 4095));
+		ULONG calls = 0;
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[&](const CBitSet *l, const CBitSet *r) {
+				++calls;
+				GPOS_UNITTEST_ASSERT(l->Get(0) && 11 == l->Size() && 1 == r->Size());
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(11 == calls && 0 == td.Stats().m_cut_calls);
+		calls = 0;
+		GPOS_UNITTEST_ASSERT(td.Partition(all.Value(),
+			[&](const CBitSet *, const CBitSet *) { return ++calls == 2; }));
+		GPOS_UNITTEST_ASSERT(2 == calls);
+	}
+	// Reuse whole simple blocks, but rebuild a block split by vertex
+	// deletion. A union of intact yet disconnected blocks is not connected.
+	{
+		CDPHyperGraph graph(mp, 7);
+		for (ULONG base = 0; base < 6; base += 2)
+		{
+			AddSimpleEdge(mp, &graph, base, base + 1, base * 3);
+			AddSimpleEdge(mp, &graph, base + 1, base + 2, base * 3 + 1);
+			AddSimpleEdge(mp, &graph, base, base + 2, base * 3 + 2);
+		}
+		CDPHyperPlan unused(mp, 10000);
+		CTDHyperEnumerator td(mp, &graph, &unused);
+		const auto partition = [&](std::initializer_list<ULONG> members) {
+			CAutoRef<CBitSet> nodes(Pbs(mp, members));
+			ULONG calls = 0;
+			GPOS_UNITTEST_ASSERT(!td.Partition(nodes.Value(),
+				[&](const CBitSet *, const CBitSet *) { ++calls; return false; }));
+			return calls;
+		};
+		GPOS_UNITTEST_ASSERT(9 == partition({0, 1, 2, 3, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(1 == td.Stats().m_bcc_builds);
+		GPOS_UNITTEST_ASSERT(6 == partition({2, 3, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(1 == td.Stats().m_bcc_builds);
+		GPOS_UNITTEST_ASSERT(1 == td.Stats().m_bcc_reuses);
+		GPOS_UNITTEST_ASSERT(4 == partition({2, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(2 == td.Stats().m_bcc_builds);
+		GPOS_UNITTEST_ASSERT(0 == partition({0, 1, 5, 6}));
+		GPOS_UNITTEST_ASSERT(3 == td.Stats().m_bcc_builds);
+		// The failed/rebuilt child must not change the root's reusable blocks.
+		GPOS_UNITTEST_ASSERT(9 == partition({0, 1, 2, 3, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(2 == td.Stats().m_bcc_reuses);
+	}
+	// Two intact bridges can still belong to disconnected components.
+	{
+		CDPHyperGraph graph(mp, 5);
+		for (ULONG v = 1; v < 5; ++v)
+		{
+			AddSimpleEdge(mp, &graph, v - 1, v, v - 1);
+		}
+		CDPHyperPlan unused(mp, 10000);
+		CTDHyperEnumerator td(mp, &graph, &unused);
+		CAutoRef<CBitSet> all(Pbs(mp, {0, 1, 2, 3, 4}));
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[](const CBitSet *, const CBitSet *) { return false; }));
+		CAutoRef<CBitSet> disconnected(Pbs(mp, {0, 1, 3, 4}));
+		GPOS_UNITTEST_ASSERT(!td.Partition(disconnected.Value(),
+			[](const CBitSet *, const CBitSet *) {
+				GPOS_UNITTEST_ASSERT(false && "disconnected block union");
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(0 == td.Stats().m_bcc_reuses);
+		GPOS_UNITTEST_ASSERT(2 == td.Stats().m_bcc_builds);
+	}
+	// Sec. 4.5.3: filtering a child must not mutate the parent's edge view.
+	// Seeing both representatives is insufficient when a full endpoint is
+	// absent; a later larger subset must be able to reactivate that edge.
+	{
+		CDPHyperGraph graph(mp, 4);
+		const std::vector<SMaskEdge> edges{{1, 2}, {3, 4}, {7, 8}};
+		for (ULONG id = 0; id < edges.size(); ++id)
+		{
+			CAutoRef<CBitSet> l(PbsFromMask(mp, edges[id].m_left));
+			CAutoRef<CBitSet> r(PbsFromMask(mp, edges[id].m_right));
+			graph.AddEdge(l.Value(), r.Value(), 100 + id);
+		}
+		CDPHyperPlan bottom_up(mp, 100), top_down(mp, 100);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		for (ULONG subset : {5UL, 3UL, 15UL, 5UL})
+		{
+			CAutoRef<CBitSet> nodes(PbsFromMask(mp, subset));
+			ULONG calls = 0;
+			GPOS_UNITTEST_ASSERT(!td.Partition(nodes.Value(),
+				[&](const CBitSet *, const CBitSet *) { ++calls; return false; }));
+			GPOS_UNITTEST_ASSERT((subset == 5 ? 0 : 1) == calls);
+		}
+		GPOS_UNITTEST_ASSERT(td.Stats().m_simple_subproblems > 0);
+		GPOS_UNITTEST_ASSERT(td.Stats().m_isolated_subproblems > 0);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
+	// Repeatable small enumeration comparison; never assert timing. This
+	// measures the eager adapter, including preparation and the coverage sweep.
+	for (ULONG shape = 0; shape < 4; ++shape)
+	{
+		CDPHyperGraph graph(mp, 8);
+		for (ULONG l = 0; l < 8; ++l)
+		{
+			for (ULONG r = l + 1; r < 8; ++r)
+			{
+				if ((0 == shape && r == l + 1) || (1 == shape && 0 == l) ||
+					2 == shape || (3 == shape && r == l + 1))
+				{
+					CAutoRef<CBitSet> left(Pbs(mp, {l}));
+					CAutoRef<CBitSet> right(Pbs(mp, {r}));
+					if (3 == shape)
+					{
+						for (ULONG node = 0; node < l; ++node)
+						{
+							(void) left->ExchangeSet(node);
+						}
+					}
+					graph.AddEdge(left.Value(), right.Value(), l * 8 + r);
+				}
+			}
+		}
+		for (ULONG repeat = 0; repeat < 3; ++repeat)
+		{
+			CDPHyperPlan bottom_up(mp, 10000), top_down(mp, 10000);
+			CWallClock clock(true);
+			CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+			GPOS_UNITTEST_ASSERT(!bu.Enumerate());
+			ULONG bu_us = clock.ElapsedUS();
+			clock.Restart();
+			CTDHyperEnumerator td(mp, &graph, &top_down);
+			GPOS_UNITTEST_ASSERT(!td.Enumerate());
+			ULONG td_us = clock.ElapsedUS();
+			GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+			GPOS_TRACE_FORMAT("TDHyperBenchmark: shape=%d repeat=%d nodes=8 "
+				"pairs=%d bottom_up_us=%d top_down_us=%d blocks=%d "
+				"cut_calls=%d articulation_merges=%d edge_checks=%d "
+				"simple_subproblems=%d isolated_subproblems=%d "
+				"bcc_builds=%d bcc_reuses=%d", shape, repeat,
+				bottom_up.PairCount(), bu_us, td_us, td.Stats().m_block_partitions,
+				td.Stats().m_cut_calls, td.Stats().m_articulation_merges,
+				td.Stats().m_edge_checks, td.Stats().m_simple_subproblems,
+				td.Stats().m_isolated_subproblems,
+				td.Stats().m_bcc_builds, td.Stats().m_bcc_reuses);
 		}
 	}
 	return GPOS_OK;

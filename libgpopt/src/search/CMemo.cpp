@@ -293,7 +293,8 @@ CMemo::PgroupInsert(CGroup *pgroupTarget, CExpression *pexprOrigin,
 //---------------------------------------------------------------------------
 CExpression *
 CMemo::PexprExtractPlan(CMemoryPool *mp, CGroup *pgroupRoot,
-						CReqdPropPlan *prppInput, ULONG ulSearchStages)
+						CReqdPropPlan *prppInput, ULONG ulSearchStages,
+						COptimizationContext *request)
 {
 	// check stack size
 	GPOS_CHECK_STACK_SIZE;
@@ -319,8 +320,12 @@ CMemo::PexprExtractPlan(CMemoryPool *mp, CGroup *pgroupRoot,
 		// or physical expressions. In this case, we lookup the best optimization context
 		// for the given required plan properties, and then retrieve the best group
 		// expression under the optimization context.
-		poc = pgroupRoot->PocLookupBest(mp, ulSearchStages, prppInput);
+		// A bounded child need not have an unbounded request at all. Extract
+		// the context actually chosen by its parent, not another budget.
+		poc = request != nullptr ? request :
+			pgroupRoot->PocLookupBest(mp, ulSearchStages, prppInput);
 		GPOS_ASSERT(nullptr != poc);
+		GPOS_ASSERT(poc->Pgroup() == pgroupRoot);
 
 		pgexprBest = pgroupRoot->PgexprBest(poc);
 		if (nullptr != pgexprBest)
@@ -347,6 +352,7 @@ CMemo::PexprExtractPlan(CMemoryPool *mp, CGroup *pgroupRoot,
 	{
 		CGroup *pgroupChild = (*pgexprBest)[i];
 		CReqdPropPlan *prppChild = nullptr;
+		COptimizationContext *child_request = nullptr;
 
 		// If the child group doesn't have scalar expression, we get the optimization
 		// context for that child group as well as the required plan properties.
@@ -379,10 +385,14 @@ CMemo::PexprExtractPlan(CMemoryPool *mp, CGroup *pgroupRoot,
 			GPOS_ASSERT(nullptr != pocChild);
 
 			prppChild = pocChild->Prpp();
+			if (pocChild->FBounded())
+			{
+				child_request = pocChild;
+			}
 		}
 
 		CExpression *pexprChild =
-			PexprExtractPlan(mp, pgroupChild, prppChild, ulSearchStages);
+			PexprExtractPlan(mp, pgroupChild, prppChild, ulSearchStages, child_request);
 		pdrgpexpr->Append(pexprChild);
 	}
 

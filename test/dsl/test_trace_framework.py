@@ -22,6 +22,8 @@ from build_xform_replacement_inventory import (
     merge_inventory,
 )
 from compare_rule_traces import compare, read_records
+from compare_join_enumerators import row_bag, settings as join_settings
+from compare_join_enumerators import compare as compare_joins
 from import_wetune_workloads import postgres_schema, schema_catalog
 from merge_rule_graph import merge_graph, read_trace_inputs, render_dot
 from replacement_rule_classification import audit_rule_file, audit_rule_text
@@ -69,6 +71,78 @@ from run_workload_comparison import (
 
 
 class TraceFrameworkTest(unittest.TestCase):
+    def test_join_comparison_keeps_bags_and_audit_out_of_timing(self) -> None:
+        self.assertEqual(row_bag('a\\nb\t1\nx\t2\n'), row_bag('x\t2\na\\nb\t1\n'))
+        self.assertNotEqual(row_bag('x\t2\nx\t2\n'), row_bag('x\t2\n'))
+        self.assertNotEqual(row_bag('\\N\n'), row_bag('\n'))
+        self.assertNotEqual(row_bag('\\N\n'), row_bag('\\\\N\n'))
+        baseline = join_settings(False, 10000, dsl=True)
+        candidate = join_settings(True, 10000, dsl=True)
+        self.assertEqual(baseline.replace('dphyper_top_down=off', 'dphyper_top_down=on'), candidate)
+        self.assertIn('dphyper_verify=off', candidate)
+        self.assertIn('trace_dsl_rule=off', candidate)
+        self.assertIn('dphyper_verify=on', join_settings(True, 10000, verify=True))
+        self.assertIn('enable_space_pruning=on', candidate)
+        self.assertIn('enable_cost_budget=off', candidate)
+        self.assertEqual(candidate.replace('enable_cost_budget=off', 'enable_cost_budget=on'),
+                         join_settings(True, 10000, dsl=True, cost_budget=True))
+        self.assertEqual(candidate.replace('enable_space_pruning=on', 'enable_space_pruning=off'),
+                         join_settings(True, 10000, dsl=True, space_pruning=False))
+
+    def test_join_comparison_rejects_two_identical_wrong_results(self) -> None:
+        def fake_psql(binary, socket, port, database, sql, timeout):
+            if 'enable_orca=off' not in sql:
+                self.assertIn('enable_space_pruning=off', sql)
+                self.assertIn('enable_cost_budget=on', sql)
+            if 'COPY (' in sql:
+                return ('2,2\n' if 'enable_orca=off' in sql else '1,1\n', '', 0, 1)
+            return (json.dumps([{
+                'Plan': {'Node Type': 'Result', 'Total Cost': 1},
+                'Optimizer': 'pg_orca', 'Planning Time': 1, 'Execution Time': 1,
+            }]), ('DPHyperVerify: status=equal\nCostBudgetSummary: feasible=2 bounded_failure=3 '
+                  'pruned=4 reused_feasible=5 reused_failure=6 '
+                  'reused_lower_bound=7 skipped_jobs=18 precheck_skipped_jobs=19 '
+                  'local_bounds=20 local_rejections=21'), 0, 1)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            query = root / 'query.sql'
+            query.write_text('SELECT 1')
+            args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True,
+                                   no_space_pruning=True, cost_budget=True)
+            with patch('compare_join_enumerators.psql', side_effect=fake_psql):
+                result = compare_joins(args, Path('psql'), root, 'test', query, root / 'output')
+            self.assertTrue(result['rows_equal'])
+            self.assertFalse(result['postgres_equal'])
+            self.assertTrue(result['failures'])
+            self.assertFalse(result['space_pruning'])
+            self.assertEqual(result['audit']['top_down']['cost_budget_events'],
+                             {'feasible': 2, 'bounded_failure': 3, 'pruned': 4})
+            self.assertEqual(result['audit']['top_down']['cost_budget_reuse'],
+                             {'feasible': 5, 'failure': 6})
+            self.assertEqual(result['audit']['top_down']['cost_budget_early'],
+                             {'lower_bound': 7, 'skipped_jobs': 18})
+            self.assertEqual(result['audit']['top_down']['cost_budget_precheck_jobs'], 19)
+            self.assertEqual(result['audit']['top_down']['cost_budget_local'],
+                             {'bounds': 20, 'rejections': 21})
+
+    def test_join_comparison_requires_completed_audit(self) -> None:
+        plan = json.dumps([{'Plan': {'Node Type': 'Result'}, 'Optimizer': 'pg_orca'}])
+        for stdout, rc in ((plan, 3), ('', 0), (plan.replace('pg_orca', 'postgres'), 0)):
+            with self.subTest(stdout=stdout, rc=rc), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                query = root / 'query.sql'
+                query.write_text('SELECT 1')
+                args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True)
+                # A timeout/fallback may follow many successfully verified
+                # regions. The successful prefix is not a completed audit.
+                with patch('compare_join_enumerators.psql', return_value=(
+                    stdout, 'DPHyperVerify: status=equal', rc, 1,
+                )):
+                    result = compare_joins(args, Path('psql'), root, 'test', query, root / 'output')
+                self.assertFalse(result['cuts_verified'])
+                self.assertTrue(result['failures'])
+
     def test_runtime_rule_edges_merge_as_multigraph_evidence(self) -> None:
         base = {
             "schema_version": 1,
@@ -615,7 +689,7 @@ class TraceFrameworkTest(unittest.TestCase):
     def test_dphyper_stability_parses_region_events(self) -> None:
         events = parse_dphyper_events(
             'TRACE,"DPHyper: status=applied group=4 nodes=5 '
-            'enumeration=simplified mode=replacement",\n'
+            'enumeration=simplified mode=replacement td_bcc_builds=1 td_bcc_reuses=27",\n'
             'TRACE,"DPHyper: status=fallback reason=pair_budget '
             'owner=greedy_nary",\n'
         )
@@ -629,6 +703,8 @@ class TraceFrameworkTest(unittest.TestCase):
                     "nodes": 5,
                     "enumeration": "simplified",
                     "mode": "replacement",
+                    "td_bcc_builds": 1,
+                    "td_bcc_reuses": 27,
                 },
                 {
                     "status": "fallback",
