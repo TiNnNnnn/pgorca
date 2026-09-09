@@ -30,6 +30,9 @@ public:
 		ULONG m_articulation_merges = 0;
 		ULONG m_block_partitions = 0;
 		ULONG m_cut_calls = 0;
+		ULONG m_edge_checks = 0;
+		ULONG m_simple_subproblems = 0;
+		ULONG m_isolated_subproblems = 0;
 	};
 
 private:
@@ -37,12 +40,18 @@ private:
 	const CDPHyperGraph *m_graph;
 	IDPHyperReceiver *m_receiver;
 	std::vector<std::pair<ULONG, ULONG>> m_representatives;
+	std::vector<ULONG> m_edges;
 	std::unordered_map<ULONG, std::vector<CBitSet *>> m_completed;
 	SStats m_stats;
 
 	void ComputeAdjacency();
-	BOOL Visit(const CBitSet *nodes);
-	BOOL VisitPair(const CBitSet *left, const CBitSet *right);
+	std::vector<ULONG> InducedEdges(const CBitSet *nodes,
+								  const std::vector<ULONG> &parent_edges);
+	BOOL Partition(const CBitSet *nodes, const std::vector<ULONG> &edges,
+				   const CutCallback &callback);
+	BOOL Visit(const CBitSet *nodes, const std::vector<ULONG> &parent_edges);
+	BOOL VisitPair(const CBitSet *left, const CBitSet *right,
+				   const std::vector<ULONG> &edges);
 	BOOL Sweep(const std::vector<std::vector<ULONG>> &adjacency,
 			   const CBitSet *nodes, const CBitSet *excluded);
 

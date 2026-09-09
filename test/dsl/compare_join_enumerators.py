@@ -29,7 +29,8 @@ ROOT = Path(__file__).resolve().parent
 VERIFY = re.compile(r"DPHyperVerify: status=(\w+)")
 
 
-def settings(top_down: bool, budget: int, verify: bool = False, dsl: bool = False) -> str:
+def settings(top_down: bool, budget: int, verify: bool = False, dsl: bool = False,
+             space_pruning: bool = True) -> str:
     return f"""
 LOAD 'pg_orca';
 SET pg_orca.enable_orca=on;
@@ -40,6 +41,7 @@ SET pg_orca.dphyper_shadow=off;
 SET pg_orca.dphyper_top_down={'on' if top_down else 'off'};
 SET pg_orca.dphyper_verify={'on' if verify else 'off'};
 SET pg_orca.dphyper_pair_budget={budget};
+SET pg_orca.enable_space_pruning={'on' if space_pruning else 'off'};
 SET pg_orca.trace_fallback=on;
 SET optimizer_print_xform=off;
 SET optimizer_print_xform_results=off;
@@ -62,8 +64,10 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
     audits, plans, rows = {}, {}, {}
     timings = {mode: [] for mode in ("bottom_up", "top_down")}
     failures = []
+    space_pruning = not getattr(args, 'no_space_pruning', False)
     for mode in timings:
-        base = settings(mode == "top_down", args.pair_budget, verify=True, dsl=args.dsl)
+        base = settings(mode == "top_down", args.pair_budget, verify=True, dsl=args.dsl,
+                        space_pruning=space_pruning)
         stdout, stderr, rc, _ = psql(binary, socket, args.port, database,
             base + "SET optimizer_print_xform=on; SET optimizer_print_xform_results=on;"
             + "SET optimizer_print_plan=on;"
@@ -94,7 +98,8 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
                 modes.reverse()
             for mode in modes:
                 stdout, stderr, rc, _ = psql(binary, socket, args.port, database,
-                    settings(mode == "top_down", args.pair_budget, dsl=args.dsl)
+                    settings(mode == "top_down", args.pair_budget, dsl=args.dsl,
+                             space_pruning=space_pruning)
                     + f"EXPLAIN (ANALYZE, TIMING OFF, BUFFERS OFF, FORMAT JSON) {sql};",
                     args.timeout)
                 planning, execution = explain_times(stdout)
@@ -108,7 +113,8 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
                 break
         for mode in timings:
             stdout, stderr, rc, _ = psql(binary, socket, args.port, database,
-                settings(mode == "top_down", args.pair_budget, dsl=args.dsl)
+                settings(mode == "top_down", args.pair_budget, dsl=args.dsl,
+                         space_pruning=space_pruning)
                 + f"COPY ({sql}) TO STDOUT WITH (FORMAT text);", args.timeout)
             (output / f"{mode}.rows.txt").write_text(stdout)
             if rc:
@@ -143,6 +149,7 @@ def compare(args, binary: Path, socket: Path, database: str, query: Path, output
     )
     plan_equal = plans["bottom_up"] is not None and plans["bottom_up"] == plans["top_down"]
     result = {
+        "space_pruning": space_pruning,
         "query": str(query), "failures": failures, "rows_equal": rows_equal,
         "postgres_equal": postgres_equal,
         "row_count": sum(rows.get("bottom_up", {}).values()),
@@ -165,6 +172,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--pair-budget", type=int, default=100000)
     parser.add_argument("--dsl", action="store_true", help="enable the same DSL library in both arms")
+    parser.add_argument("--no-space-pruning", action="store_true",
+                        help="disable existing physical cost pruning in both arms for correctness audits")
     parser.add_argument("--port", type=int, default=60474)
     parser.add_argument("--output", type=Path, default=ROOT.parent.parent / "output/dphyper-counter-strike/comparison")
     args = parser.parse_args()
@@ -216,7 +225,7 @@ def main() -> int:
             checked([binary / "pg_ctl", "-D", data, "stop", "-m", "fast"])
     summary = {
         "queries": len(results), "pair_budget": args.pair_budget, "repeats": args.repeats,
-        "dsl": args.dsl,
+        "dsl": args.dsl, "space_pruning": not args.no_space_pruning,
         "rows_equal": sum(result["rows_equal"] for result in results),
         "postgres_equal": sum(result["postgres_equal"] for result in results),
         "cuts_verified": sum(result["cuts_verified"] for result in results),

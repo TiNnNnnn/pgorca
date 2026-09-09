@@ -1248,7 +1248,8 @@ CJobJoinEnumeration::FEnumerateRegion(
 			"cost_cache_exact_stats_misses=%d mode=%s algorithm=%s "
 			"td_subproblems=%d td_cache_hits=%d td_candidates=%d "
 			"td_rejected=%d td_compound_merges=%d td_articulation_merges=%d "
-			"td_block_partitions=%d td_cut_calls=%d",
+			"td_block_partitions=%d td_cut_calls=%d td_edge_checks=%d "
+			"td_simple_subproblems=%d td_isolated_subproblems=%d",
 			m_pgexpr->Pgroup()->Id(), m_pgexpr->Pop()->SzId(), node_count,
 			region->GeneratedEdgeCount(), region->CartesianEdgeCount(),
 			dependency_count, plan->PairCount(), plan->SeenCount(), fingerprint_hash,
@@ -1270,7 +1271,8 @@ CJobJoinEnumeration::FEnumerateRegion(
 			td_stats.m_subproblems, td_stats.m_cache_hits, td_stats.m_candidates,
 			td_stats.m_rejected, td_stats.m_compound_merges,
 			td_stats.m_articulation_merges, td_stats.m_block_partitions,
-			td_stats.m_cut_calls);
+			td_stats.m_cut_calls, td_stats.m_edge_checks,
+			td_stats.m_simple_subproblems, td_stats.m_isolated_subproblems);
 	}
 	PublishRegionStatus(region_members, CGroupExpression::EdphSucceeded);
 	return true;

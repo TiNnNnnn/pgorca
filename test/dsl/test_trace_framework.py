@@ -82,9 +82,14 @@ class TraceFrameworkTest(unittest.TestCase):
         self.assertIn('dphyper_verify=off', candidate)
         self.assertIn('trace_dsl_rule=off', candidate)
         self.assertIn('dphyper_verify=on', join_settings(True, 10000, verify=True))
+        self.assertIn('enable_space_pruning=on', candidate)
+        self.assertEqual(candidate.replace('enable_space_pruning=on', 'enable_space_pruning=off'),
+                         join_settings(True, 10000, dsl=True, space_pruning=False))
 
     def test_join_comparison_rejects_two_identical_wrong_results(self) -> None:
         def fake_psql(binary, socket, port, database, sql, timeout):
+            if 'enable_orca=off' not in sql:
+                self.assertIn('enable_space_pruning=off', sql)
             if 'COPY (' in sql:
                 return ('2,2\n' if 'enable_orca=off' in sql else '1,1\n', '', 0, 1)
             return (json.dumps([{
@@ -96,12 +101,14 @@ class TraceFrameworkTest(unittest.TestCase):
             root = Path(directory)
             query = root / 'query.sql'
             query.write_text('SELECT 1')
-            args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True)
+            args = SimpleNamespace(port=1234, pair_budget=100, repeats=1, timeout=60, dsl=True,
+                                   no_space_pruning=True)
             with patch('compare_join_enumerators.psql', side_effect=fake_psql):
                 result = compare_joins(args, Path('psql'), root, 'test', query, root / 'output')
             self.assertTrue(result['rows_equal'])
             self.assertFalse(result['postgres_equal'])
             self.assertTrue(result['failures'])
+            self.assertFalse(result['space_pruning'])
 
     def test_join_comparison_requires_completed_audit(self) -> None:
         plan = json.dumps([{'Plan': {'Node Type': 'Result'}, 'Optimizer': 'pg_orca'}])

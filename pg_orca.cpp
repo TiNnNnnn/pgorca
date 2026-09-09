@@ -182,6 +182,7 @@ bool  pg_orca_enable_assert_maxonerow = false;
 bool  pg_orca_enable_dphyper = false;
 bool  pg_orca_dphyper_shadow = false;
 bool  pg_orca_dphyper_top_down = false;
+bool  pg_orca_enable_space_pruning = true;
 bool  pg_orca_dphyper_verify = false;
 int   pg_orca_dphyper_edge_budget = 100000;
 int   pg_orca_dphyper_pair_budget = 100;
@@ -898,6 +899,16 @@ void _PG_init(void)
         NULL,
         &pg_orca_dphyper_top_down,
         false,
+        PGC_USERSET,
+        0, NULL, NULL, NULL);
+
+    DefineCustomBoolVariable(
+        "pg_orca.enable_space_pruning",
+        "Enable existing ORCA physical cost lower-bound pruning. Disable "
+        "for cost-pruning comparisons; logical exploration is unchanged.",
+        NULL,
+        &pg_orca_enable_space_pruning,
+        true,
         PGC_USERSET,
         0, NULL, NULL, NULL);
 

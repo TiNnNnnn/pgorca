@@ -282,6 +282,8 @@ CTDHyperEnumerator::ComputeAdjacency()
 	// subgraphs: a representative is active only if BOTH full endpoints fit.
 	using Link = std::pair<ULONG, ULONG>;
 	std::map<Link, std::vector<ULONG>> overlap;
+	m_edges.resize(m_graph->LogicalEdgeCount());
+	std::iota(m_edges.begin(), m_edges.end(), 0);
 	m_representatives.resize(m_graph->LogicalEdgeCount());
 	std::vector<BOOL> assigned(m_graph->LogicalEdgeCount(), false);
 	for (ULONG id = 0; id < m_graph->LogicalEdgeCount(); ++id)
@@ -340,22 +342,64 @@ CTDHyperEnumerator::ComputeAdjacency()
 BOOL
 CTDHyperEnumerator::Partition(const CBitSet *nodes, const CutCallback &callback)
 {
+	return Partition(nodes, InducedEdges(nodes, m_edges), callback);
+}
+
+std::vector<ULONG>
+CTDHyperEnumerator::InducedEdges(const CBitSet *nodes,
+								   const std::vector<ULONG> &parent_edges)
+{
+	// Sec. 4.5.3: inherit the parent's reduced graph. An edge absent from a
+	// parent cannot reappear in a descendant; test BOTH complete endpoints,
+	// never just the representative pair. Keep original edge ids unchanged.
+	std::vector<ULONG> edges;
+	if (nodes->Size() > 1)
+	{
+		for (ULONG id : parent_edges)
+		{
+			GPOS_CHECK_ABORT;
+			++m_stats.m_edge_checks;
+			const auto *edge = m_graph->Edge(2 * id);
+			if (nodes->ContainsAll(edge->m_left) &&
+				nodes->ContainsAll(edge->m_right))
+			{
+				edges.push_back(id);
+			}
+		}
+	}
+	return edges;
+}
+
+BOOL
+CTDHyperEnumerator::Partition(const CBitSet *nodes,
+								const std::vector<ULONG> &edges,
+								const CutCallback &callback)
+{
 	if (nodes->Size() < 2)
 	{
 		return false;
 	}
 	const ULONG n = m_graph->NodeCount();
 	std::vector<std::vector<ULONG>> adj(n);
-	std::map<std::pair<ULONG, ULONG>, std::vector<ULONG>> provenance;
-	for (ULONG id = 0; id < m_graph->LogicalEdgeCount(); ++id)
+	BOOL complex = false;
+	for (ULONG id : edges)
 	{
 		const auto *edge = m_graph->Edge(2 * id);
-		if (nodes->ContainsAll(edge->m_left) &&
-			nodes->ContainsAll(edge->m_right))
+		complex = complex || edge->m_left->Size() > 1 ||
+				  edge->m_right->Size() > 1;
+		const auto link = m_representatives[id];
+		AddAdjacent(&adj, link.first, link.second);
+	}
+	CBitSetIter vertex(*nodes);
+	while (vertex.Advance())
+	{
+		if (adj[vertex.Bit()].empty())
 		{
-			const auto link = m_representatives[id];
-			AddAdjacent(&adj, link.first, link.second);
-			provenance[std::minmax(link.first, link.second)].push_back(id);
+			// The mapped graph is a connectivity relaxation. An isolated
+			// vertex already disproves connectivity in the original graph;
+			// no BCC analysis or compound construction can repair it.
+			++m_stats.m_isolated_subproblems;
+			return false;
 		}
 	}
 
@@ -367,6 +411,24 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes, const CutCallback &callback)
 	if (info.order.size() != nodes->Size())
 	{
 		return false;
+	}
+	auto emit_original = [&](const CBitSet *l, const CBitSet *r)
+	{
+		++m_stats.m_candidates;
+		return l->Get(First(nodes)) ? callback(l, r) : callback(r, l);
+	};
+	if (!complex)
+	{
+		// Sec. 4.5.3: a simple induced subgraph goes directly to the
+		// graph-aware partitioner, even when its parent was complex.
+		++m_stats.m_simple_subproblems;
+		return BlockCuts(m_mp, adj, nodes, info, emit_original, &m_stats);
+	}
+	std::map<std::pair<ULONG, ULONG>, std::vector<ULONG>> provenance;
+	for (ULONG id : edges)
+	{
+		const auto link = m_representatives[id];
+		provenance[std::minmax(link.first, link.second)].push_back(id);
 	}
 	std::vector<ULONG> parent(n);
 	std::iota(parent.begin(), parent.end(), 0);
@@ -413,14 +475,7 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes, const CutCallback &callback)
 	{
 		// Simple blocks already use original node ids: no union-find decoding
 		// or second adjacency construction is needed on this common path.
-		return BlockCuts(
-			m_mp, adj, nodes, info,
-			[&](const CBitSet *l, const CBitSet *r)
-			{
-				++m_stats.m_candidates;
-				return l->Get(First(nodes)) ? callback(l, r) : callback(r, l);
-			},
-			&m_stats);
+		return BlockCuts(m_mp, adj, nodes, info, emit_original, &m_stats);
 	}
 
 	// Sec. 4.5.2: enlarge a non-separable compound only with vertices on
@@ -498,11 +553,13 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes, const CutCallback &callback)
 }
 
 BOOL
-CTDHyperEnumerator::VisitPair(const CBitSet *left, const CBitSet *right)
+CTDHyperEnumerator::VisitPair(const CBitSet *left, const CBitSet *right,
+								const std::vector<ULONG> &parent_edges)
 {
 	std::vector<ULONG> edges;
-	for (ULONG id = 0; id < m_graph->LogicalEdgeCount(); ++id)
+	for (ULONG id : parent_edges)
 	{
+		++m_stats.m_edge_checks;
 		const auto *edge = m_graph->Edge(2 * id);
 		if ((left->ContainsAll(edge->m_left) &&
 			 right->ContainsAll(edge->m_right)) ||
@@ -517,7 +574,7 @@ CTDHyperEnumerator::VisitPair(const CBitSet *left, const CBitSet *right)
 		++m_stats.m_rejected;
 		return false;
 	}
-	if (Visit(left) || Visit(right))
+	if (Visit(left, parent_edges) || Visit(right, parent_edges))
 	{
 		return true;
 	}
@@ -539,7 +596,8 @@ CTDHyperEnumerator::VisitPair(const CBitSet *left, const CBitSet *right)
 }
 
 BOOL
-CTDHyperEnumerator::Visit(const CBitSet *nodes)
+CTDHyperEnumerator::Visit(const CBitSet *nodes,
+						  const std::vector<ULONG> &parent_edges)
 {
 	GPOS_CHECK_ABORT;
 	GPOS_CHECK_STACK_SIZE;
@@ -557,10 +615,11 @@ CTDHyperEnumerator::Visit(const CBitSet *nodes)
 		}
 	}
 	++m_stats.m_subproblems;
-	if (Partition(nodes,
+	const auto edges = InducedEdges(nodes, parent_edges);
+	if (Partition(nodes, edges,
 				  [&](const CBitSet *l, const CBitSet *r)
 				  {
-					  return VisitPair(l, r);
+					  return VisitPair(l, r, edges);
 				  }))
 	{
 		return true;
@@ -575,7 +634,9 @@ CTDHyperEnumerator::Sweep(const std::vector<std::vector<ULONG>> &adj,
 {
 	GPOS_CHECK_ABORT;
 	GPOS_CHECK_STACK_SIZE;
-	if (Visit(nodes))
+	// This walk grows subsets instead of descending. Previously inactive
+	// edges can become active, so each coverage seed uses the original graph.
+	if (Visit(nodes, m_edges))
 	{
 		return true;
 	}
@@ -618,7 +679,7 @@ CTDHyperEnumerator::Enumerate()
 		}
 		(void)all->ExchangeSet(node);
 	}
-	if (0 == all->Size() || Visit(all.Value()))
+	if (0 == all->Size() || Visit(all.Value(), m_edges))
 	{
 		return 0 != all->Size();
 	}

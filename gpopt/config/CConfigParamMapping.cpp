@@ -27,6 +27,7 @@ extern bool pg_orca_enable_assert_maxonerow;
 extern bool pg_orca_enable_dphyper;
 extern bool pg_orca_dphyper_shadow;
 extern bool pg_orca_dphyper_top_down;
+extern bool pg_orca_enable_space_pruning;
 extern bool pg_orca_dphyper_verify;
 // pg_orca.dsl_only_xforms / pg_orca.trace_dsl_rule (pg_orca.cpp): scoped
 // native-xform suppression and per-rule attribution for replacement tests.
@@ -54,7 +55,6 @@ static bool enable_partition_prop    = true;
 static bool enable_partition_sel     = true;
 static bool enable_oj_rewrite        = true;
 static bool derive_stats_all_groups  = true;
-static bool enable_space_pruning     = true;
 static bool force_multistage_agg     = false;
 static bool print_missing_stats      = false;
 static bool enable_hashjoin_rbc      = false;
@@ -213,7 +213,7 @@ CConfigParamMapping::SConfigMappingElem CConfigParamMapping::m_elements[] = {
 	{EopttraceDonotDeriveStatsForAllGroups, &derive_stats_all_groups,
 	 true,  GPOS_WSZ_LIT("Disable deriving stats for all groups after exploration.")},
 
-	{EopttraceEnableSpacePruning, &enable_space_pruning,
+	{EopttraceEnableSpacePruning, &pg_orca_enable_space_pruning,
 	 false, GPOS_WSZ_LIT("Enable space pruning in optimizer.")},
 
 	{EopttraceForceMultiStageAgg, &force_multistage_agg,

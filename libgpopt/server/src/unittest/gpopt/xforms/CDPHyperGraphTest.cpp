@@ -1099,6 +1099,34 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 			[&](const CBitSet *, const CBitSet *) { return ++calls == 2; }));
 		GPOS_UNITTEST_ASSERT(2 == calls);
 	}
+	// Sec. 4.5.3: filtering a child must not mutate the parent's edge view.
+	// Seeing both representatives is insufficient when a full endpoint is
+	// absent; a later larger subset must be able to reactivate that edge.
+	{
+		CDPHyperGraph graph(mp, 4);
+		const std::vector<SMaskEdge> edges{{1, 2}, {3, 4}, {7, 8}};
+		for (ULONG id = 0; id < edges.size(); ++id)
+		{
+			CAutoRef<CBitSet> l(PbsFromMask(mp, edges[id].m_left));
+			CAutoRef<CBitSet> r(PbsFromMask(mp, edges[id].m_right));
+			graph.AddEdge(l.Value(), r.Value(), 100 + id);
+		}
+		CDPHyperPlan bottom_up(mp, 100), top_down(mp, 100);
+		CDPHyperEnumerator bu(mp, &graph, &bottom_up);
+		CTDHyperEnumerator td(mp, &graph, &top_down);
+		for (ULONG subset : {5UL, 3UL, 15UL, 5UL})
+		{
+			CAutoRef<CBitSet> nodes(PbsFromMask(mp, subset));
+			ULONG calls = 0;
+			GPOS_UNITTEST_ASSERT(!td.Partition(nodes.Value(),
+				[&](const CBitSet *, const CBitSet *) { ++calls; return false; }));
+			GPOS_UNITTEST_ASSERT((subset == 5 ? 0 : 1) == calls);
+		}
+		GPOS_UNITTEST_ASSERT(td.Stats().m_simple_subproblems > 0);
+		GPOS_UNITTEST_ASSERT(td.Stats().m_isolated_subproblems > 0);
+		GPOS_UNITTEST_ASSERT(!bu.Enumerate() && !td.Enumerate());
+		GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
+	}
 	// Repeatable small enumeration comparison; never assert timing. This
 	// measures the eager adapter, including preparation and the coverage sweep.
 	for (ULONG shape = 0; shape < 4; ++shape)
@@ -1138,9 +1166,12 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 			GPOS_UNITTEST_ASSERT(bottom_up.Matches(top_down));
 			GPOS_TRACE_FORMAT("TDHyperBenchmark: shape=%d repeat=%d nodes=8 "
 				"pairs=%d bottom_up_us=%d top_down_us=%d blocks=%d "
-				"cut_calls=%d articulation_merges=%d", shape, repeat,
+				"cut_calls=%d articulation_merges=%d edge_checks=%d "
+				"simple_subproblems=%d isolated_subproblems=%d", shape, repeat,
 				bottom_up.PairCount(), bu_us, td_us, td.Stats().m_block_partitions,
-				td.Stats().m_cut_calls, td.Stats().m_articulation_merges);
+				td.Stats().m_cut_calls, td.Stats().m_articulation_merges,
+				td.Stats().m_edge_checks, td.Stats().m_simple_subproblems,
+				td.Stats().m_isolated_subproblems);
 		}
 	}
 	return GPOS_OK;
