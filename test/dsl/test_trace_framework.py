@@ -686,7 +686,7 @@ class TraceFrameworkTest(unittest.TestCase):
     def test_dphyper_stability_parses_region_events(self) -> None:
         events = parse_dphyper_events(
             'TRACE,"DPHyper: status=applied group=4 nodes=5 '
-            'enumeration=simplified mode=replacement",\n'
+            'enumeration=simplified mode=replacement td_bcc_builds=1 td_bcc_reuses=27",\n'
             'TRACE,"DPHyper: status=fallback reason=pair_budget '
             'owner=greedy_nary",\n'
         )
@@ -700,6 +700,8 @@ class TraceFrameworkTest(unittest.TestCase):
                     "nodes": 5,
                     "enumeration": "simplified",
                     "mode": "replacement",
+                    "td_bcc_builds": 1,
+                    "td_bcc_reuses": 27,
                 },
                 {
                     "status": "fallback",

@@ -1315,6 +1315,59 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 			[&](const CBitSet *, const CBitSet *) { return ++calls == 2; }));
 		GPOS_UNITTEST_ASSERT(2 == calls);
 	}
+	// Reuse whole simple blocks, but rebuild a block split by vertex
+	// deletion. A union of intact yet disconnected blocks is not connected.
+	{
+		CDPHyperGraph graph(mp, 7);
+		for (ULONG base = 0; base < 6; base += 2)
+		{
+			AddSimpleEdge(mp, &graph, base, base + 1, base * 3);
+			AddSimpleEdge(mp, &graph, base + 1, base + 2, base * 3 + 1);
+			AddSimpleEdge(mp, &graph, base, base + 2, base * 3 + 2);
+		}
+		CDPHyperPlan unused(mp, 10000);
+		CTDHyperEnumerator td(mp, &graph, &unused);
+		const auto partition = [&](std::initializer_list<ULONG> members) {
+			CAutoRef<CBitSet> nodes(Pbs(mp, members));
+			ULONG calls = 0;
+			GPOS_UNITTEST_ASSERT(!td.Partition(nodes.Value(),
+				[&](const CBitSet *, const CBitSet *) { ++calls; return false; }));
+			return calls;
+		};
+		GPOS_UNITTEST_ASSERT(9 == partition({0, 1, 2, 3, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(1 == td.Stats().m_bcc_builds);
+		GPOS_UNITTEST_ASSERT(6 == partition({2, 3, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(1 == td.Stats().m_bcc_builds);
+		GPOS_UNITTEST_ASSERT(1 == td.Stats().m_bcc_reuses);
+		GPOS_UNITTEST_ASSERT(4 == partition({2, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(2 == td.Stats().m_bcc_builds);
+		GPOS_UNITTEST_ASSERT(0 == partition({0, 1, 5, 6}));
+		GPOS_UNITTEST_ASSERT(3 == td.Stats().m_bcc_builds);
+		// The failed/rebuilt child must not change the root's reusable blocks.
+		GPOS_UNITTEST_ASSERT(9 == partition({0, 1, 2, 3, 4, 5, 6}));
+		GPOS_UNITTEST_ASSERT(2 == td.Stats().m_bcc_reuses);
+	}
+	// Two intact bridges can still belong to disconnected components.
+	{
+		CDPHyperGraph graph(mp, 5);
+		for (ULONG v = 1; v < 5; ++v)
+		{
+			AddSimpleEdge(mp, &graph, v - 1, v, v - 1);
+		}
+		CDPHyperPlan unused(mp, 10000);
+		CTDHyperEnumerator td(mp, &graph, &unused);
+		CAutoRef<CBitSet> all(Pbs(mp, {0, 1, 2, 3, 4}));
+		GPOS_UNITTEST_ASSERT(!td.Partition(all.Value(),
+			[](const CBitSet *, const CBitSet *) { return false; }));
+		CAutoRef<CBitSet> disconnected(Pbs(mp, {0, 1, 3, 4}));
+		GPOS_UNITTEST_ASSERT(!td.Partition(disconnected.Value(),
+			[](const CBitSet *, const CBitSet *) {
+				GPOS_UNITTEST_ASSERT(false && "disconnected block union");
+				return false;
+			}));
+		GPOS_UNITTEST_ASSERT(0 == td.Stats().m_bcc_reuses);
+		GPOS_UNITTEST_ASSERT(2 == td.Stats().m_bcc_builds);
+	}
 	// Sec. 4.5.3: filtering a child must not mutate the parent's edge view.
 	// Seeing both representatives is insufficient when a full endpoint is
 	// absent; a later larger subset must be able to reactivate that edge.
@@ -1383,11 +1436,13 @@ CDPHyperGraphTest::EresUnittest_TopDown()
 			GPOS_TRACE_FORMAT("TDHyperBenchmark: shape=%d repeat=%d nodes=8 "
 				"pairs=%d bottom_up_us=%d top_down_us=%d blocks=%d "
 				"cut_calls=%d articulation_merges=%d edge_checks=%d "
-				"simple_subproblems=%d isolated_subproblems=%d", shape, repeat,
+				"simple_subproblems=%d isolated_subproblems=%d "
+				"bcc_builds=%d bcc_reuses=%d", shape, repeat,
 				bottom_up.PairCount(), bu_us, td_us, td.Stats().m_block_partitions,
 				td.Stats().m_cut_calls, td.Stats().m_articulation_merges,
 				td.Stats().m_edge_checks, td.Stats().m_simple_subproblems,
-				td.Stats().m_isolated_subproblems);
+				td.Stats().m_isolated_subproblems,
+				td.Stats().m_bcc_builds, td.Stats().m_bcc_reuses);
 		}
 	}
 	return GPOS_OK;

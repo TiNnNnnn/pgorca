@@ -87,6 +87,41 @@ struct SBlockInfo
 	}
 };
 
+BOOL
+ReuseBlocks(const CBitSet *nodes,
+			const std::vector<std::vector<ULONG>> &root_blocks,
+			std::vector<std::vector<ULONG>> *blocks)
+{
+	if (root_blocks.empty() ||
+		(root_blocks.size() == 1 && nodes->Size() != root_blocks[0].size()))
+	{
+		return false;
+	}
+	ULONG rank = 0;
+	for (const auto &block : root_blocks)
+	{
+		GPOS_CHECK_ABORT;
+		ULONG inside = 0;
+		for (ULONG v : block)
+		{
+			inside += nodes->Get(v);
+		}
+		if (inside < 2)
+		{
+			continue;
+		}
+		if (inside != block.size())
+		{
+			return false; // deleting vertices can split a biconnected block
+		}
+		blocks->push_back(block);
+		rank += inside - 1;
+	}
+	// The block-cut graph is a forest. Complete blocks cover one connected
+	// component iff sum(|block|-1) = |nodes|-1, counting isolated nodes too.
+	return rank == nodes->Size() - 1;
+}
+
 // Enumerate connected bipartitions, keeping the smallest vertex on the left.
 // When growing the left disconnects its complement, a connected final right
 // must be contained in exactly one component. Absorb the other components
@@ -179,11 +214,11 @@ Cuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
 // partitioner optimization, not a cost-based restriction of the join space.
 BOOL
 BlockCuts(CMemoryPool *mp, const std::vector<std::vector<ULONG>> &adj,
-		  const CBitSet *nodes, const SBlockInfo &info,
+		  const CBitSet *nodes, const std::vector<std::vector<ULONG>> &blocks,
 		  const CTDHyperEnumerator::CutCallback &callback,
 		  CTDHyperEnumerator::SStats *stats)
 {
-	for (const auto &block : info.blocks)
+	for (const auto &block : blocks)
 	{
 		GPOS_CHECK_ABORT;
 		++stats->m_block_partitions;
@@ -410,11 +445,6 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes,
 	// Keep the bridge condition: at a non-bridge articulation, different
 	// complex exits can be alternatives. Contracting either exit's endpoint
 	// can lose valid cuts even without a simple edge into the separated block.
-	const SBlockInfo info(adj, First(nodes));
-	if (info.order.size() != nodes->Size())
-	{
-		return false;
-	}
 	auto emit_original = [&](const CBitSet *l, const CBitSet *r)
 	{
 		++m_stats.m_candidates;
@@ -422,10 +452,30 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes,
 	};
 	if (!complex)
 	{
+		std::vector<std::vector<ULONG>> blocks;
+		if (ReuseBlocks(nodes, m_root_blocks, &blocks))
+		{
+			++m_stats.m_bcc_reuses;
+			++m_stats.m_simple_subproblems;
+			return BlockCuts(m_mp, adj, nodes, blocks, emit_original, &m_stats);
+		}
+	}
+	++m_stats.m_bcc_builds;
+	const SBlockInfo info(adj, First(nodes));
+	if (info.order.size() != nodes->Size())
+	{
+		return false;
+	}
+	if (!complex)
+	{
+		if (nodes->Size() == n)
+		{
+			m_root_blocks = info.blocks;
+		}
 		// Sec. 4.5.3: a simple induced subgraph goes directly to the
 		// graph-aware partitioner, even when its parent was complex.
 		++m_stats.m_simple_subproblems;
-		return BlockCuts(m_mp, adj, nodes, info, emit_original, &m_stats);
+		return BlockCuts(m_mp, adj, nodes, info.blocks, emit_original, &m_stats);
 	}
 	std::map<std::pair<ULONG, ULONG>, std::vector<ULONG>> provenance;
 	for (ULONG id : edges)
@@ -478,7 +528,7 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes,
 	{
 		// Simple blocks already use original node ids: no union-find decoding
 		// or second adjacency construction is needed on this common path.
-		return BlockCuts(m_mp, adj, nodes, info, emit_original, &m_stats);
+		return BlockCuts(m_mp, adj, nodes, info.blocks, emit_original, &m_stats);
 	}
 
 	// Sec. 4.5.2: enlarge a non-separable compound only with vertices on
@@ -550,8 +600,9 @@ CTDHyperEnumerator::Partition(const CBitSet *nodes,
 				   ? callback(decoded_left.Value(), decoded_right.Value())
 				   : callback(decoded_right.Value(), decoded_left.Value());
 	};
+	++m_stats.m_bcc_builds;
 	const SBlockInfo contracted_info(contracted, First(all.Value()));
-	return BlockCuts(m_mp, contracted, all.Value(), contracted_info, emit,
+	return BlockCuts(m_mp, contracted, all.Value(), contracted_info.blocks, emit,
 					 &m_stats);
 }
 

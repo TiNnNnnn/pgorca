@@ -33,6 +33,8 @@ public:
 		ULONG m_edge_checks = 0;
 		ULONG m_simple_subproblems = 0;
 		ULONG m_isolated_subproblems = 0;
+		ULONG m_bcc_builds = 0;
+		ULONG m_bcc_reuses = 0;
 	};
 
 private:
@@ -41,6 +43,9 @@ private:
 	IDPHyperReceiver *m_receiver;
 	std::vector<std::pair<ULONG, ULONG>> m_representatives;
 	std::vector<ULONG> m_edges;
+	// Immutable blocks of a connected, wholly simple root graph. A child
+	// may reuse them only when it does not split any participating block.
+	std::vector<std::vector<ULONG>> m_root_blocks;
 	std::unordered_map<ULONG, std::vector<CBitSet *>> m_completed;
 	SStats m_stats;
 
