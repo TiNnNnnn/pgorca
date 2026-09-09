@@ -99,7 +99,7 @@ public:
 
 	// initialize job
 	void Init(CGroup *pgroup, CGroupExpression *pgexprOrigin,
-			  COptimizationContext *poc);
+			  COptimizationContext *poc, BOOL budget_reuse = false);
 
 	// current optimization level accessor
 	EOptimizationLevel

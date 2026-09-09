@@ -485,11 +485,7 @@ CJobGroupExpressionOptimization::ScheduleChildGroupsJobs(CSchedulerContext *psc)
 		return;
 	}
 	DOUBLE cost_limit = -1.0;
-	const BOOL budget_search = GPOS_FTRACE(EopttraceEnableCostBudget) &&
-		GPOS_FTRACE(EopttraceEnableSpacePruning) &&
-		psc->Peng()->UlSearchStages() == 1 &&
-		!GPOS_FTRACE(EopttraceForceMultiStageAgg) &&
-		!GPOS_FTRACE(EopttraceForceThreeStageScalarDQA);
+	const BOOL budget_search = psc->Peng()->FCostBudgetSearchEnabled();
 	if (budget_search)
 	{
 		if (m_child_requests.empty())

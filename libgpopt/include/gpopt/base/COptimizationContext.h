@@ -324,13 +324,12 @@ public:
 	}
 
 	// hash function used for computing stats during costing
-	static ULONG
-	UlHashForStats(const COptimizationContext *poc)
-	{
-		GPOS_ASSERT(m_pocInvalid != poc);
+	static ULONG UlHashForStats(const COptimizationContext *poc);
 
-		return HashValue(*poc);
-	}
+	// Same optimization problem, independent of the caller's budget.
+	static ULONG UlHashForBudgetReuse(const COptimizationContext *poc);
+	static BOOL FEqualForBudgetReuse(const COptimizationContext *left,
+								   const COptimizationContext *right);
 
 	// equality function used for computing stats during costing
 	static BOOL FEqualForStats(const COptimizationContext *pocLeft,

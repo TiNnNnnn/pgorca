@@ -68,6 +68,8 @@ private:
 	ULONG m_cost_budget_feasible{0};
 	ULONG m_cost_budget_failed{0};
 	ULONG m_cost_budget_pruned{0};
+	ULONG m_cost_budget_reused_feasible{0};
+	ULONG m_cost_budget_reused_failure{0};
 
 	// memo table
 	CMemo *m_pmemo;
@@ -232,7 +234,9 @@ private:
 									   const CHAR *szHeader) const;
 
 public:
-	void RecordCostBudget(COptimizationContext *request, BOOL pruned);
+	BOOL FCostBudgetSearchEnabled() const;
+	void RecordCostBudget(COptimizationContext *request, BOOL pruned,
+						  BOOL reused = false);
 	CEngine(const CEngine &) = delete;
 
 	// ctor

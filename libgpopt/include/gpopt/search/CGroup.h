@@ -209,6 +209,20 @@ private:
 	// hashtable of optimization contexts
 	ShtOC m_sht;
 
+	// Appendix A: a completed success is optimal for this problem; a
+	// failed ceiling proves failure only at that ceiling or below. Pointers
+	// are borrowed from m_sht; no plans or trees are copied into this index.
+	struct SBudgetCompletion
+	{
+		COptimizationContext *best{nullptr};
+		COptimizationContext *failure{nullptr};
+	};
+	using BudgetCompletionMap = CHashMap<COptimizationContext, SBudgetCompletion,
+		COptimizationContext::UlHashForBudgetReuse,
+		COptimizationContext::FEqualForBudgetReuse,
+		CleanupNULL<COptimizationContext>, CleanupDelete<SBudgetCompletion>>;
+	BudgetCompletionMap *m_budget_completions{nullptr};
+
 	// number of group expressions
 	ULONG m_ulGExprs;
 
@@ -527,6 +541,11 @@ public:
 
 	// insert given context into contexts hash table
 	COptimizationContext *PocInsert(COptimizationContext *poc);
+
+	// Reuse completed optima or proven failure ceilings across budgets.
+	// Returned contexts remain owned by the existing context table.
+	COptimizationContext *PocReuseCompleted(COptimizationContext *request);
+	void RecordBudgetCompletion(COptimizationContext *context);
 
 	// update the best group cost under the given optimization context
 	void UpdateBestCost(COptimizationContext *poc, CCostContext *pcc);

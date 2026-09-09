@@ -32,6 +32,8 @@
 #include "gpopt/operators/CLogicalLeftSemiJoin.h"
 #include "gpopt/operators/CLogicalProject.h"
 #include "gpopt/operators/CLogicalSelect.h"
+#include "gpopt/operators/CPhysicalSort.h"
+#include "naucrates/statistics/CStatistics.h"
 #include "gpopt/operators/CPatternTree.h"
 #include "gpopt/operators/CPredicateUtils.h"
 #include "gpopt/operators/CScalarIdent.h"
@@ -525,7 +527,7 @@ CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
 	CMemoryPool *mp = amp.Pmp();
 	CDSLTestFixture fixture(mp);
 	CAutoRef<CGroup> group(GPOS_NEW(mp) CGroup(mp, false));
-	CAutoRef<CReqdPropPlan> props(GPOS_NEW(mp) CReqdPropPlan(
+	const auto props = [&]() { return GPOS_NEW(mp) CReqdPropPlan(
 		GPOS_NEW(mp) CColRefSet(mp),
 		GPOS_NEW(mp) CEnfdOrder(GPOS_NEW(mp) COrderSpec(mp), CEnfdOrder::EomSatisfy),
 		GPOS_NEW(mp) CEnfdDistribution(GPOS_NEW(mp) CDistributionSpecSingleton(),
@@ -534,17 +536,22 @@ CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
 			CRewindabilitySpec::ErtNone, CRewindabilitySpec::EmhtNoMotion),
 			CEnfdRewindability::ErmSatisfy),
 		GPOS_NEW(mp) CEnfdPartitionPropagation(GPOS_NEW(mp) CPartitionPropagationSpec(mp),
-			CEnfdPartitionPropagation::EppmSatisfy), GPOS_NEW(mp) CCTEReq(mp)));
-	const auto request = [&](DOUBLE limit, BOOL different_stats = false) {
-		props->AddRef();
+			CEnfdPartitionPropagation::EppmSatisfy), GPOS_NEW(mp) CCTEReq(mp)); };
+	const auto request = [&](DOUBLE limit, BOOL different_stats = false,
+		ULONG stage = 0, BOOL different_props = false) {
+		auto *required = props();
+		if (different_props)
+		{
+			required->PcrsRequired()->Include(fixture.PcrCreateInt4("output_column"));
+		}
 		auto *columns = GPOS_NEW(mp) CColRefSet(mp);
 		if (different_stats)
 		{
 			columns->Include(fixture.PcrCreateInt4("stats_column"));
 		}
-		return GPOS_NEW(mp) COptimizationContext(mp, group.Value(), props.Value(),
+		return GPOS_NEW(mp) COptimizationContext(mp, group.Value(), required,
 			GPOS_NEW(mp) CReqdPropRelational(columns),
-			GPOS_NEW(mp) IStatisticsArray(mp), 0, limit);
+			GPOS_NEW(mp) IStatisticsArray(mp), stage, limit);
 	};
 	CAutoRef<COptimizationContext> small(request(1.0));
 	CAutoRef<COptimizationContext> repeated(request(1.0));
@@ -571,6 +578,75 @@ CDPHyperGraphTest::EresUnittest_CostBudgetContexts()
 		GPOS_UNITTEST_ASSERT(group->PocInsert(context) == context);
 	}
 	GPOS_UNITTEST_ASSERT(!unlimited->FBounded());
+	GPOS_UNITTEST_ASSERT(COptimizationContext::FEqualForStats(small.Value(), wide.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::UlHashForStats(small.Value()) ==
+		COptimizationContext::UlHashForStats(wide.Value()));
+	group->RecordBudgetCompletion(small.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(zero.Value()) == small.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(wide.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_stats.Value()) == nullptr);
+	CAutoRef<COptimizationContext> other_stage(request(0.0, false, 1));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_stage.Value()) == nullptr);
+	CAutoRef<COptimizationContext> other_props(request(0.0, false, 0, true));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(other_props.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(COptimizationContext::FEqualForStats(small.Value(), other_props.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::UlHashForStats(small.Value()) ==
+		COptimizationContext::UlHashForStats(other_props.Value()));
+
+	// An in-flight incumbent must not be published as an optimum. Only
+	// complete the request after all its alternatives have been visited.
+	CAutoRef<CGroupExpression> expr(GPOS_NEW(mp) CGroupExpression(mp,
+		GPOS_NEW(mp) CPhysicalSort(mp, GPOS_NEW(mp) COrderSpec(mp)),
+		GPOS_NEW(mp) CGroupArray(mp),
+		CXform::ExfInvalid, nullptr, false));
+	wide->AddRef();
+	expr->AddRef();
+	CAutoRef<CCostContext> cost(GPOS_NEW(mp) CCostContext(mp, wide.Value(), 0, expr.Value()));
+	cost->SetState(CCostContext::estCosting);
+	cost->SetCost(CCost(3.0));
+	cost->SetState(CCostContext::estCosted);
+	wide->SetState(COptimizationContext::estOptimizing);
+	wide->SetBest(cost.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == nullptr);
+	wide->SetState(COptimizationContext::estOptimized);
+	group->RecordBudgetCompletion(wide.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == wide.Value());
+	CAutoRef<COptimizationContext> tie(request(3.0));
+	CAutoRef<COptimizationContext> under(request(std::nextafter(3.0, 0.0)));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(tie.Value()) == wide.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value()) == nullptr);
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(zero.Value()) == small.Value());
+	CAutoRef<COptimizationContext> failure(request(2.0));
+	failure->SetState(COptimizationContext::estOptimizing);
+	failure->SetState(COptimizationContext::estOptimized);
+	failure->AddRef();
+	GPOS_UNITTEST_ASSERT(group->PocInsert(failure.Value()) == failure.Value());
+	group->RecordBudgetCompletion(failure.Value());
+	group->RecordBudgetCompletion(small.Value());
+	CAutoRef<COptimizationContext> middle(request(1.5));
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(middle.Value()) == failure.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(under.Value()) == nullptr);
+	// Adding alternatives invalidates previous completion certificates.
+	expr->AddRef();
+	CGroupProxy(group.Value()).Insert(expr.Value());
+	GPOS_UNITTEST_ASSERT(group->PocReuseCompleted(unlimited.Value()) == nullptr);
+
+	// Equal coarse summaries are not evidence of equal distributions.
+	CAutoRef<ULongPtrArray> cols(GPOS_NEW(mp) ULongPtrArray(mp));
+	CAutoRef<COptimizationContext> stat_a(request(10.0));
+	CAutoRef<COptimizationContext> stat_b(request(10.0));
+	stat_a->Pdrgpstat()->Append(CStatistics::MakeDummyStats(mp, cols.Value(), CDouble(10)));
+	stat_b->Pdrgpstat()->Append(CStatistics::MakeDummyStats(mp, cols.Value(), CDouble(10)));
+	GPOS_UNITTEST_ASSERT(*(*stat_a->Pdrgpstat())[0] == *(*stat_b->Pdrgpstat())[0]);
+	GPOS_UNITTEST_ASSERT(!COptimizationContext::FEqualForStats(stat_a.Value(), stat_b.Value()));
+	GPOS_UNITTEST_ASSERT(!COptimizationContext::FEqualForBudgetReuse(stat_a.Value(), stat_b.Value()));
+	CAutoRef<COptimizationContext> stat_same(request(20.0));
+	(*stat_a->Pdrgpstat())[0]->AddRef();
+	stat_same->Pdrgpstat()->Append((*stat_a->Pdrgpstat())[0]);
+	GPOS_UNITTEST_ASSERT(COptimizationContext::FEqualForBudgetReuse(stat_a.Value(), stat_same.Value()));
+	GPOS_UNITTEST_ASSERT(COptimizationContext::UlHashForBudgetReuse(stat_a.Value()) ==
+		COptimizationContext::UlHashForBudgetReuse(stat_same.Value()));
 	return GPOS_OK;
 }
 

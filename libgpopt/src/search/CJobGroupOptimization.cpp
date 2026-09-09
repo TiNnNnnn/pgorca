@@ -12,7 +12,6 @@
 #include "gpopt/search/CJobGroupOptimization.h"
 
 #include "gpopt/base/CCostContext.h"
-#include "gpopt/base/COptCtxt.h"
 #include "gpopt/engine/CEngine.h"
 #include "gpopt/search/CGroup.h"
 #include "gpopt/search/CGroupExpression.h"
@@ -142,7 +141,7 @@ CJobGroupOptimization::Init(
 	CGroupExpression
 		*pgexprOrigin,	// group expression that triggered optimization job,
 						// NULL if this is the Root group
-	COptimizationContext *poc)
+	COptimizationContext *poc, BOOL budget_reuse)
 {
 	GPOS_ASSERT(nullptr != poc);
 	GPOS_ASSERT(pgroup == poc->Pgroup());
@@ -161,24 +160,7 @@ CJobGroupOptimization::Init(
 	m_jsm.SetAction(estDampingOptimizationLevel, EevtCompleteOptimization);
 
 	m_pgexprOrigin = pgexprOrigin;
-	m_poc = nullptr;
-	// ponytail: exact budgets repeat work; cross-budget completion reuse
-	// must preserve both required-property and statistics identity.
-	if (poc->FBounded())
-	{
-		// A completed unbounded optimum below the ceiling already answers
-		// this request. Never reuse a different statistics context or an
-		// unfinished incumbent as a completed optimum.
-		auto *cached = m_pgroup->PocLookup(COptCtxt::PoctxtFromTLS()->Pmp(), poc->Prpp(),
-			poc->UlSearchStageIndex());
-		if (cached != nullptr && cached->Est() == COptimizationContext::estOptimized &&
-			cached->PccBest() != nullptr &&
-			cached->PccBest()->Cost().Get() <= poc->CostLimit() &&
-			COptimizationContext::FEqualForStats(cached, poc))
-		{
-			m_poc = cached;
-		}
-	}
+	m_poc = budget_reuse ? m_pgroup->PocReuseCompleted(poc) : nullptr;
 	if (m_poc == nullptr)
 	{
 		m_poc = m_pgroup->PocInsert(poc);
@@ -345,6 +327,10 @@ CJobGroupOptimization::EevtCompleteOptimization(CSchedulerContext *psc,
 
 	// move optimization context to optimized state
 	pjgo->m_poc->SetState(COptimizationContext::estOptimized);
+	if (psc->Peng()->FCostBudgetSearchEnabled())
+	{
+		pjgo->m_pgroup->RecordBudgetCompletion(pjgo->m_poc);
+	}
 	psc->Peng()->RecordCostBudget(pjgo->m_poc, false);
 
 	return eevOptimized;
@@ -385,7 +371,11 @@ CJobGroupOptimization::ScheduleJob(CSchedulerContext *psc, CGroup *pgroup,
 
 	// initialize job
 	CJobGroupOptimization *pjgo = PjConvert(pj);
-	pjgo->Init(pgroup, pgexprOrigin, poc);
+	pjgo->Init(pgroup, pgexprOrigin, poc, psc->Peng()->FCostBudgetSearchEnabled());
+	if (pjgo->m_poc->CostLimit() != poc->CostLimit())
+	{
+		psc->Peng()->RecordCostBudget(pjgo->m_poc, false, true /*reused*/);
+	}
 	psc->Psched()->Add(pjgo, pjParent);
 	return pjgo->m_poc;
 }

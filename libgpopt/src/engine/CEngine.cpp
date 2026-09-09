@@ -1001,15 +1001,36 @@ CEngine::FSafeToPrune(
 
 //---------------------------------------------------------------------------
 //	@function:
-//		CEngine::RecordCostBudget
+//		CEngine::FCostBudgetSearchEnabled
 //
 //	@doc:
-//		Collect bounded-search counters without per-event logging
+//		Keep budget propagation and completion reuse under the same guards
 //
 //---------------------------------------------------------------------------
-void
-CEngine::RecordCostBudget(COptimizationContext *request, BOOL pruned)
+BOOL
+CEngine::FCostBudgetSearchEnabled() const
 {
+	return GPOS_FTRACE(EopttraceEnableCostBudget) &&
+		GPOS_FTRACE(EopttraceEnableSpacePruning) && UlSearchStages() == 1 &&
+		!GPOS_FTRACE(EopttraceForceMultiStageAgg) &&
+		!GPOS_FTRACE(EopttraceForceThreeStageScalarDQA);
+}
+
+void
+CEngine::RecordCostBudget(COptimizationContext *request, BOOL pruned, BOOL reused)
+{
+	if (reused)
+	{
+		if (request->PccBest() != nullptr)
+		{
+			++m_cost_budget_reused_feasible;
+		}
+		else
+		{
+			++m_cost_budget_reused_failure;
+		}
+		return;
+	}
 	if (request != nullptr && request->FBounded())
 	{
 		if (pruned)
@@ -2148,7 +2169,9 @@ CEngine::Optimize()
 				CAutoTrace trace(m_mp);
 				trace.Os() << "CostBudgetSummary: feasible=" << m_cost_budget_feasible
 					<< " bounded_failure=" << m_cost_budget_failed
-					<< " pruned=" << m_cost_budget_pruned;
+					<< " pruned=" << m_cost_budget_pruned
+					<< " reused_feasible=" << m_cost_budget_reused_feasible
+					<< " reused_failure=" << m_cost_budget_reused_failure;
 			}
 		}
 

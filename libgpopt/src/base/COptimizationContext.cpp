@@ -147,9 +147,50 @@ COptimizationContext::FEqualForStats(const COptimizationContext *pocLeft,
 	GPOS_ASSERT(nullptr != pocLeft);
 	GPOS_ASSERT(nullptr != pocRight);
 
-	return pocLeft->GetReqdRelationalProps()->PcrsStat()->Equals(
-			   pocRight->GetReqdRelationalProps()->PcrsStat()) &&
-		   pocLeft->Pdrgpstat()->Equals(pocRight->Pdrgpstat());
+	if (!pocLeft->GetReqdRelationalProps()->PcrsStat()->Equals(
+			pocRight->GetReqdRelationalProps()->PcrsStat()) ||
+		pocLeft->Pdrgpstat()->Size() != pocRight->Pdrgpstat()->Size())
+	{
+		return false;
+	}
+	// IStatistics::operator== compares only coarse summaries, not histogram
+	// distributions. Equal row counts cannot justify sharing a cost/stat result.
+	for (ULONG i = 0; i < pocLeft->Pdrgpstat()->Size(); ++i)
+	{
+		if ((*pocLeft->Pdrgpstat())[i] != (*pocRight->Pdrgpstat())[i])
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+ULONG
+COptimizationContext::UlHashForStats(const COptimizationContext *poc)
+{
+	// Budget and required physical properties are not statistics identity.
+	ULONG hash = poc->GetReqdRelationalProps()->PcrsStat()->HashValue();
+	for (ULONG i = 0; i < poc->Pdrgpstat()->Size(); ++i)
+	{
+		hash = gpos::CombineHashes(hash, gpos::HashPtr((*poc->Pdrgpstat())[i]));
+	}
+	return hash;
+}
+
+ULONG
+COptimizationContext::UlHashForBudgetReuse(const COptimizationContext *poc)
+{
+	return gpos::CombineHashes(poc->Prpp()->HashValue(),
+		gpos::CombineHashes(UlHashForStats(poc), poc->UlSearchStageIndex()));
+}
+
+BOOL
+COptimizationContext::FEqualForBudgetReuse(const COptimizationContext *left,
+										  const COptimizationContext *right)
+{
+	return left->Pgroup() == right->Pgroup() &&
+		left->UlSearchStageIndex() == right->UlSearchStageIndex() &&
+		left->Prpp()->Equals(right->Prpp()) && FEqualForStats(left, right);
 }
 
 
@@ -384,8 +425,9 @@ COptimizationContext::PrppCTEProducer(CMemoryPool *mp,
 		return nullptr;
 	}
 
-	COptimizationContext *pocProducer = (*pgexpr)[0]->PocLookupBest(
-		mp, ulSearchStages, (*pccBest->Pdrgpoc())[0]->Prpp());
+	COptimizationContext *producer_request = (*pccBest->Pdrgpoc())[0];
+	COptimizationContext *pocProducer = producer_request->FBounded() ? producer_request :
+		(*pgexpr)[0]->PocLookupBest(mp, ulSearchStages, producer_request->Prpp());
 	if (nullptr == pocProducer)
 	{
 		return nullptr;
@@ -396,8 +438,9 @@ COptimizationContext::PrppCTEProducer(CMemoryPool *mp,
 	{
 		return nullptr;
 	}
-	COptimizationContext *pocConsumer = (*pgexpr)[1]->PocLookupBest(
-		mp, ulSearchStages, (*pccBest->Pdrgpoc())[1]->Prpp());
+	COptimizationContext *consumer_request = (*pccBest->Pdrgpoc())[1];
+	COptimizationContext *pocConsumer = consumer_request->FBounded() ? consumer_request :
+		(*pgexpr)[1]->PocLookupBest(mp, ulSearchStages, consumer_request->Prpp());
 	if (nullptr == pocConsumer)
 	{
 		return nullptr;
