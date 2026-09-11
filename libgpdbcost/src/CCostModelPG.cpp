@@ -24,6 +24,7 @@
 #include "gpopt/operators/CExpressionHandle.h"
 #include "gpopt/operators/CPhysicalAgg.h"
 #include "gpopt/operators/CPhysicalUnion.h"
+#include "gpopt/operators/CPhysicalSetOp.h"
 #include "gpopt/operators/CPhysicalHashJoin.h"
 #include "gpopt/operators/CPhysicalDynamicScan.h"
 #include "gpopt/operators/CPhysicalIndexOnlyScan.h"
@@ -71,6 +72,8 @@ extern double cpu_operator_cost;
 extern int    effective_cache_size;	  // 8KB pages
 extern int    work_mem;				   // KB
 extern double hash_mem_multiplier;
+extern double disable_cost;
+extern bool enable_hashagg;
 }
 
 namespace
@@ -2469,6 +2472,32 @@ CCostModelPG::CostUnion(CExpressionHandle &exprhdl, const SCostingInfo *pci)
 	return CCost(pci->NumRebinds() * cost);
 }
 
+CCost
+CCostModelPG::CostSetOp(CExpressionHandle &exprhdl, const SCostingInfo *pci)
+{
+	auto *op = static_cast<CPhysicalSetOp *>(exprhdl.Pop());
+	const ULONG keys = op->PdrgpcrOutput()->Size();
+	DOUBLE cost = 0.0;
+	// PG create_setop_path: comparisons on both inputs, plus emitted rows.
+	// For n-ary inputs the left-associated intermediate cannot exceed input 0.
+	const DOUBLE left_rows = pci->PdRows()[0];
+	for (ULONG i = 1; i < exprhdl.Arity(); ++i)
+	{
+		const DOUBLE output = i + 1 == exprhdl.Arity() ? pci->Rows() : left_rows;
+		cost += cpu_operator_cost * (keys * (left_rows + pci->PdRows()[i]) + output);
+		// Unlike HashAgg, PG SetOp cannot spill. Retain the hash-only fallback,
+		// but prefer sorting when the conservative group-size bound exceeds memory.
+		if (op->FHash() && (!enable_hashagg ||
+			// MAXALIGN(SizeofMinimalTupleHeader) is 16 on PG's 64-bit builds.
+			(MaxAlign8(pci->GetWidth()[0]) + 16.0) * left_rows >
+			static_cast<DOUBLE>(work_mem) * 1024.0 * hash_mem_multiplier))
+		{
+			cost += disable_cost;
+		}
+	}
+	return CCost(pci->NumRebinds() * cost);
+}
+
 //---------------------------------------------------------------------------
 //	CCostModelPG::CostBitmapTableScan
 //
@@ -3298,6 +3327,9 @@ CCostModelPG::Cost(CExpressionHandle &exprhdl, const SCostingInfo *pci) const
 			break;
 		case COperator::EopPhysicalUnion:
 			local = CostUnion(exprhdl, pci);
+			break;
+		case COperator::EopPhysicalSetOp:
+			local = CostSetOp(exprhdl, pci);
 			break;
 
 		case COperator::EopPhysicalIndexScan:
