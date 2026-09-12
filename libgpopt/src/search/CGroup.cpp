@@ -574,6 +574,9 @@ CGroup::InitStats(IStatistics *stats)
 	GPOS_ASSERT(nullptr != stats);
 
 	m_pstats = stats;
+	COptCtxt *context = COptCtxt::PoctxtFromTLS();
+	if (nullptr != context)
+		context->TraceDSLStatsLifecycle(this, m_pstats);
 }
 
 
@@ -2036,6 +2039,9 @@ CGroup::ResetStats()
 		stats = m_pstats;
 		m_pstats = nullptr;
 	}
+	COptCtxt *context = COptCtxt::PoctxtFromTLS();
+	if (nullptr != context)
+		context->TraceDSLStatsLifecycle(this, nullptr);
 	CRefCount::SafeRelease(stats);
 	stats = nullptr;
 }
